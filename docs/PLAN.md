@@ -60,21 +60,21 @@ pokedrop/
 
 ## Phase 1 — Repository and system contract (est. 1–1.5 h)
 
-- [ ] Create workspaces for frontend, backend, infra, tests, scripts and docs
-- [ ] Initialize TypeScript (strict), Go modules, formatting, lockfiles and `.gitignore`
-- [ ] Keep reservation rules in `backend/internal/`, separate from Lambda handlers
-- [ ] Write `docs/api.md` (request/response shapes, statuses, error codes, auth rules)
-- [ ] CDK app: stack tags (`project=pokedrop`), 1-week log retention, DynamoDB tables for inventory and reservations (PAY_PER_REQUEST, RemovalPolicy.DESTROY in dev)
-- [ ] Seed script for three fictional cards (`make seed`)
-- [ ] Makefile targets: `build`, `test`, `deploy`, `hotswap`, `seed`
-- [ ] Budget alert confirmed; README teardown instructions
+- [x] Create workspaces for frontend, backend, infra, tests, scripts and docs
+- [x] Initialize TypeScript (strict), Go modules, formatting, lockfiles and `.gitignore`
+- [x] Keep reservation rules in `backend/internal/`, separate from Lambda handlers
+- [x] Write `docs/api.md` (request/response shapes, statuses, error codes, auth rules)
+- [x] CDK app: stack tags (`project=pokedrop`), 1-week log retention, DynamoDB tables for inventory and reservations (PAY_PER_REQUEST, RemovalPolicy.DESTROY in dev)
+- [x] Seed script for three fictional cards (`make seed`)
+- [x] Makefile targets: `build`, `test`, `deploy`, `hotswap`, `seed`
+- [x] Budget alert confirmed; README teardown instructions
 
 **Commits**
-- [ ] `chore: initialize frontend backend and infrastructure workspaces`
-- [ ] `feat: provision development resources and seed card inventory`
+- [x] `chore: initialize frontend backend and infrastructure workspaces`
+- [x] `feat: provision development resources and seed card inventory` (committed as `feat: provision development resources` and `feat: seed card inventory`, one logical change each)
 
 **Milestone**
-- [ ] The repository builds, dev resources deploy, and the catalog seeds reproducibly
+- [x] The repository builds, dev resources deploy, and the catalog seeds reproducibly
 
 ---
 
