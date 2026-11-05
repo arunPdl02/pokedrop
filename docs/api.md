@@ -1,0 +1,168 @@
+# PokéDrop API Contract
+
+HTTP API (API Gateway) backed by Go Lambdas. Region `us-west-2`. This is the source of truth for
+request/response shapes; change it before changing the implementation.
+
+## Conventions
+
+- Base URL: the `ApiUrl` stack output (see [Stack outputs](#stack-outputs)).
+- Requests and responses are JSON (`Content-Type: application/json`).
+- Timestamps are RFC 3339 UTC strings.
+- CORS: allowed origin `http://localhost:5173` (CloudFront URL added in Phase 7).
+
+## Auth rules
+
+- Every endpoint requires `Authorization: Bearer <Cognito token>`, validated by the API Gateway
+  JWT authorizer (required scope: **TBD in Phase 2**).
+- The trainer identity is the validated token's `sub` claim. It is never read from the request
+  body, path or query string.
+- A trainer can read only their own reservations. Another trainer's `requestId` is
+  indistinguishable from an unknown one (404).
+- Missing, expired or invalid tokens are rejected by the authorizer with `401` before any Lambda runs.
+
+## Error shape
+
+Errors returned by the Lambdas:
+
+```json
+{ "error": { "code": "INVALID_REQUEST", "message": "cardId is required" } }
+```
+
+`code` is stable and machine-readable; `message` is for humans and may change.
+Errors produced by API Gateway itself (`401`, `429`) use the gateway's default body
+(`{"message": "..."}`), so clients should branch on the HTTP status, not the body, for those.
+
+## Status values
+
+| Status | Returned by | Meaning |
+|---|---|---|
+| `QUEUED` | `POST /reservations` | The request was accepted onto the queue. **Not** a reservation. |
+| `CONFIRMED` | `GET /reservations/{requestId}` | The worker recorded a successful reservation (terminal). |
+| `SOLD_OUT` | `GET /reservations/{requestId}` | The worker found insufficient stock (terminal, a normal outcome). |
+
+`Delayed` is a UI-only state (polling window exceeded). The API never returns it, and a client
+timeout must never be presented as `SOLD_OUT`.
+
+---
+
+## GET /cards
+
+Returns the catalog and current availability.
+
+**Response 200**
+
+```json
+{
+  "cards": [
+    { "cardId": "card-001", "name": "Ember Drake", "rarity": "rare", "available": 12 }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `cardId` | string | Stable identifier, used in reservations |
+| `name` | string | Display name |
+| `rarity` | string | Display only |
+| `available` | integer | Current stock, always ≥ 0. May be stale by the time a reservation is processed. |
+
+**Errors:** `401`.
+
+---
+
+## POST /reservations
+
+Validates a reservation request and queues it. One card per reservation.
+
+**Request**
+
+```json
+{ "requestId": "3f2b8c1e-6d4a-4a57-9b0e-1c2d3e4f5a6b", "cardId": "card-001" }
+```
+
+| Field | Type | Rules |
+|---|---|---|
+| `requestId` | string | Client-generated UUID. The frontend generates one per submission and **reuses it on retry**. |
+| `cardId` | string | Must exist in the catalog |
+
+**Response 202 Accepted**
+
+```json
+{ "requestId": "3f2b8c1e-6d4a-4a57-9b0e-1c2d3e4f5a6b", "status": "QUEUED" }
+```
+
+- `202` means **queued, not reserved**. It is returned only after SQS has accepted the message.
+- Stock is not checked or decremented here. The outcome is available from
+  `GET /reservations/{requestId}`.
+- Resubmitting the same `requestId` is safe: the API may return `202` again, but a repeated
+  request ID never consumes inventory twice (enforced by the worker).
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `INVALID_REQUEST` | Malformed JSON, missing field, or `requestId` is not a UUID |
+| 401 | — | Missing or invalid token |
+| 404 | `CARD_NOT_FOUND` | `cardId` is not in the catalog |
+| 503 | `QUEUE_UNAVAILABLE` | SQS did not accept the message. Nothing was queued; retry with the **same** `requestId`. |
+
+---
+
+## GET /reservations/{requestId}
+
+Returns the outcome of the caller's reservation.
+
+**Response 200**
+
+```json
+{
+  "requestId": "3f2b8c1e-6d4a-4a57-9b0e-1c2d3e4f5a6b",
+  "cardId": "card-001",
+  "status": "CONFIRMED",
+  "updatedAt": "2026-11-05T20:15:30Z"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `requestId` | string | Echo of the path parameter |
+| `cardId` | string | Card that was requested |
+| `status` | string | `CONFIRMED` or `SOLD_OUT` |
+| `updatedAt` | string | When the worker recorded the outcome |
+
+**Not yet processed:** only the worker writes outcome records, so a request that is queued but not
+yet processed returns `404 RESERVATION_NOT_FOUND`. Clients that hold the `requestId` from a
+`202` should treat this 404 as "still queued" and keep polling (with bounded, increasing intervals).
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | — | Missing or invalid token |
+| 404 | `RESERVATION_NOT_FOUND` | Unknown `requestId`, not yet processed, **or belongs to another trainer** (ownership is concealed) |
+
+---
+
+## Error codes
+
+| HTTP | Code | Source | Retry? |
+|---|---|---|---|
+| 400 | `INVALID_REQUEST` | Lambda | No, fix the request |
+| 401 | — | Authorizer | No, sign in again |
+| 404 | `CARD_NOT_FOUND` | Lambda | No |
+| 404 | `RESERVATION_NOT_FOUND` | Lambda | While polling a known `requestId` |
+| 429 | — | API Gateway throttling | Yes, with backoff |
+| 500 | `INTERNAL_ERROR` | Lambda | Yes, with the same `requestId` |
+| 503 | `QUEUE_UNAVAILABLE` | Lambda | Yes, with the same `requestId` |
+
+## Stack outputs
+
+Needed by the frontend and `make token`. Values are recorded here in Phase 2.
+
+| Output | Value |
+|---|---|
+| `ApiUrl` | _TBD (Phase 2)_ |
+| `UserPoolId` | _TBD (Phase 2)_ |
+| `UserPoolClientId` (PKCE, frontend) | _TBD (Phase 2)_ |
+| `DevClientId` (dev-only, `ADMIN_USER_PASSWORD_AUTH`) | _TBD (Phase 2)_ |
+| `HostedUiDomain` | _TBD (Phase 2)_ |
