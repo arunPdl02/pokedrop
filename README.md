@@ -59,6 +59,9 @@ Dev tables use `RemovalPolicy.DESTROY`, so destroying the stack deletes the tabl
 cd infra && npx cdk destroy -c stage=dev --profile pokedrop
 ```
 
+CDK asks for confirmation; answer `y`. In a non-interactive shell (scripts, CI, coding agents) it
+refuses to run without a terminal, so add `--force` to skip the prompt.
+
 Use `-c stage=test` for the test stack. This does not remove the shared `CDKToolkit` bootstrap stack
 or its S3 bucket, and it does not affect the account's AWS Budget; those live outside this app.
 Redeploy with `make deploy` and reseed with `make seed`.
