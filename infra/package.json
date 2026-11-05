@@ -1,0 +1,26 @@
+{
+  "name": "pokedrop-infra",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "jest --passWithNoTests",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.275.0",
+    "constructs": "^10.8.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.6.6",
+    "aws-cdk": "^2.1148.0",
+    "jest": "^30.5.2",
+    "prettier": "^3.9.10",
+    "ts-jest": "^29.4.15",
+    "ts-node": "^10.9.2",
+    "typescript": "^7.0.2"
+  }
+}
