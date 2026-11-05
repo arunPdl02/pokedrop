@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build test deploy hotswap
+.PHONY: build test deploy hotswap seed
 
 build:
 	cd backend && go build ./...
@@ -24,3 +24,8 @@ deploy: build
 # CDK falls back to a full deployment for anything it cannot hotswap.
 hotswap: build
 	$(CDK) deploy --all --hotswap -c stage=$(STAGE)
+
+# Reset the dev inventory to the three seed cards (idempotent; resets stock, leaves
+# reservations untouched). Needs a deployed stack and valid AWS credentials.
+seed:
+	cd backend && go run ./cmd/seed -stage $(STAGE)

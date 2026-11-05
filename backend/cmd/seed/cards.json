@@ -1,0 +1,5 @@
+[
+  { "cardId": "card-001", "name": "Ember Drake", "rarity": "rare", "stock": 10 },
+  { "cardId": "card-002", "name": "Tidecaller Wisp", "rarity": "uncommon", "stock": 5 },
+  { "cardId": "card-003", "name": "Aurora Sentinel", "rarity": "legendary", "stock": 1 }
+]
