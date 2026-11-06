@@ -1,6 +1,7 @@
 import { CfnOutput, RemovalPolicy, Stack, StackProps, Tags } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
+import { Auth } from './auth';
 
 export interface PokedropStackProps extends StackProps {
   /** Deployment stage, e.g. `dev` or `test`. Everything except `prod` is destroyable. */
@@ -11,6 +12,7 @@ export interface PokedropStackProps extends StackProps {
 export class PokedropStack extends Stack {
   public readonly inventoryTable: Table;
   public readonly reservationsTable: Table;
+  public readonly auth: Auth;
 
   constructor(scope: Construct, id: string, props: PokedropStackProps) {
     super(scope, id, props);
@@ -32,7 +34,17 @@ export class PokedropStack extends Stack {
       removalPolicy,
     });
 
+    this.auth = new Auth(this, 'Auth', { stage: props.stage, removalPolicy });
+
     new CfnOutput(this, 'InventoryTableName', { value: this.inventoryTable.tableName });
     new CfnOutput(this, 'ReservationsTableName', { value: this.reservationsTable.tableName });
+    new CfnOutput(this, 'UserPoolId', { value: this.auth.userPool.userPoolId });
+    new CfnOutput(this, 'UserPoolClientId', { value: this.auth.userPoolClient.userPoolClientId });
+    if (this.auth.devClient) {
+      new CfnOutput(this, 'DevClientId', { value: this.auth.devClient.userPoolClientId });
+    }
+    new CfnOutput(this, 'HostedUiDomain', {
+      value: this.auth.domain.baseUrl().replace(/^https:\/\//, ''),
+    });
   }
 }
