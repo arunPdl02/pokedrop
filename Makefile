@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build test deploy hotswap seed
+.PHONY: build test deploy hotswap seed token
 
 build:
 	cd backend && go build ./...
@@ -29,3 +29,10 @@ hotswap: build
 # reservations untouched). Needs a deployed stack and valid AWS credentials.
 seed:
 	cd backend && go run ./cmd/seed -stage $(STAGE)
+
+# Print an access token for the dev test user (created on first use) on stdout; messages go to
+# stderr, so TOKEN=$$(make -s token) works. Reads TEST_USER_EMAIL / TEST_USER_PASSWORD from the
+# environment or .env.local. Uses the dev-only app client, so it refuses the prod stage.
+# Use TEST_USER_EMAIL=other@example.com make token for a second trainer.
+token:
+	@cd backend && go run ./cmd/token -stage $(STAGE)

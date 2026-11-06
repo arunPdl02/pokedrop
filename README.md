@@ -41,9 +41,24 @@ docs/            plan, API contract, decision log
 | `make deploy` | Deploy the `pokedrop-dev` stack with CDK |
 | `make hotswap` | Fast CDK deploy for Lambda changes (nothing to hotswap until Phase 2) |
 | `make seed` | Write the three seed cards to the dev inventory table |
+| `make token` | Print an access token for the dev test user, creating the user on first use (see below) |
 
 All AWS targets use profile `pokedrop` and region `us-west-2`. Use `STAGE=test make deploy` for a
 separate stack (`pokedrop-test`).
+
+### Dev test token
+
+`make token` signs in a Cognito test user through the dev-only app client (`ADMIN_USER_PASSWORD_AUTH`,
+never created for `prod`) and prints the **access token** to stdout; everything else goes to stderr.
+Put `TEST_USER_EMAIL` and `TEST_USER_PASSWORD` in `.env.local` (see `.env.example`); the password must
+meet the Cognito password policy. Environment variables override the file, so a second trainer is
+`TEST_USER_EMAIL=other@example.com make token`. The user is created on first use; an existing user's
+password is never changed.
+
+```sh
+TOKEN=$(make -s token)
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/cards"
+```
 
 ### Seeding
 
