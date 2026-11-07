@@ -1,3 +1,4 @@
+import { Catalog } from "./Catalog";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 
 function Dashboard() {
@@ -15,17 +16,22 @@ function Dashboard() {
     );
   }
   return (
-    <button type="button" onClick={signOut}>
-      Sign out
-    </button>
+    <>
+      <button type="button" className="sign-out" onClick={signOut}>
+        Sign out
+      </button>
+      <Catalog />
+    </>
   );
 }
 
 export function App() {
   return (
     <AuthProvider>
-      <h1>PokéDrop</h1>
-      <Dashboard />
+      <main>
+        <h1>PokéDrop</h1>
+        <Dashboard />
+      </main>
     </AuthProvider>
   );
 }

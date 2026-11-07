@@ -2,11 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { App } from "./App";
 import { startSignIn } from "./auth/auth";
-
-function fakeJwt(payload: object): string {
-  const encode = (value: object) => btoa(JSON.stringify(value)).replace(/=+$/, "");
-  return `${encode({ alg: "none" })}.${encode(payload)}.sig`;
-}
+import { fakeJwt } from "./test-utils";
 
 describe("App sign-in", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -21,8 +17,12 @@ describe("App sign-in", () => {
     await startSignIn(() => {});
     const { state } = JSON.parse(sessionStorage.getItem("pokedrop.pkce")!) as { state: string };
     const accessToken = fakeJwt({ sub: "trainer-1" });
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(new Response(JSON.stringify({ access_token: accessToken, expires_in: 3600 }))),
+    const fetchMock = vi.fn((url: URL | string) =>
+      Promise.resolve(
+        String(url).endsWith("/oauth2/token")
+          ? new Response(JSON.stringify({ access_token: accessToken, expires_in: 3600 }))
+          : new Response(JSON.stringify({ cards: [] })),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     window.history.replaceState({}, "", `/?code=app-test-code&state=${state}`);
@@ -34,7 +34,8 @@ describe("App sign-in", () => {
     );
 
     expect(await screen.findByRole("button", { name: "Sign out" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const tokenCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/oauth2/token"));
+    expect(tokenCalls).toHaveLength(1);
     expect(window.location.search).toBe("");
   });
 
