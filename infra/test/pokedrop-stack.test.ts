@@ -194,7 +194,7 @@ describe('PokedropStack API', () => {
     const keys = Object.values(template.findResources('AWS::ApiGatewayV2::Route'))
       .map((r) => r.Properties.RouteKey)
       .sort();
-    expect(keys).toEqual(['POST /reservations']);
+    expect(keys).toEqual(['GET /cards', 'GET /reservations/{requestId}', 'POST /reservations']);
   });
 
   test('no IAM policy grants wildcard actions', () => {
@@ -209,8 +209,80 @@ describe('PokedropStack API', () => {
     }
   });
 
+  test('Lambda is configured with the table names and queue URL', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: {
+          INVENTORY_TABLE: Match.anyValue(),
+          RESERVATIONS_TABLE: Match.anyValue(),
+          RESERVATION_QUEUE_URL: Match.anyValue(),
+        },
+      },
+    });
+  });
+
+  test('Lambda can only read the tables and send to the queue', () => {
+    const granted: string[] = [];
+    for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
+      for (const statement of policy.Properties.PolicyDocument.Statement) {
+        granted.push(...([] as string[]).concat(statement.Action));
+      }
+    }
+    expect(granted.sort()).toEqual(
+      [
+        'dynamodb:GetItem',
+        'dynamodb:Scan',
+        'dynamodb:GetItem',
+        'sqs:GetQueueAttributes',
+        'sqs:GetQueueUrl',
+        'sqs:SendMessage',
+      ].sort(),
+    );
+    for (const action of granted) {
+      expect(action).not.toMatch(/Put|Update|Delete|Transact|Receive/);
+    }
+  });
+
   test('exposes the API URL', () => {
     template.hasOutput('ApiUrl', { Value: Match.anyValue() });
+  });
+});
+
+describe('PokedropStack queue', () => {
+  const template = synth('dev');
+
+  test('has one encrypted standard queue', () => {
+    template.resourceCountIs('AWS::SQS::Queue', 1);
+    template.hasResourceProperties('AWS::SQS::Queue', { SqsManagedSseEnabled: true });
+    for (const queue of Object.values(template.findResources('AWS::SQS::Queue'))) {
+      expect(queue.Properties.FifoQueue).toBeUndefined();
+    }
+  });
+
+  test('rejects non-TLS access', () => {
+    template.hasResourceProperties('AWS::SQS::QueuePolicy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Deny',
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+          }),
+        ]),
+      },
+    });
+  });
+
+  test('is destroyed in dev and retained in prod', () => {
+    for (const q of Object.values(template.findResources('AWS::SQS::Queue'))) {
+      expect(q.DeletionPolicy).toBe('Delete');
+    }
+    for (const q of Object.values(synth('prod').findResources('AWS::SQS::Queue'))) {
+      expect(q.DeletionPolicy).toBe('Retain');
+    }
+  });
+
+  test('exposes the queue URL', () => {
+    template.hasOutput('ReservationQueueUrl', { Value: Match.anyValue() });
   });
 });
 

@@ -14,22 +14,57 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	"github.com/arunPdl02/pokedrop/backend/internal/queue"
 	"github.com/arunPdl02/pokedrop/backend/internal/reservations"
+	"github.com/arunPdl02/pokedrop/backend/internal/storage"
 )
 
-const routePostReservations = "POST /reservations"
+const (
+	routeGetCards         = "GET /cards"
+	routePostReservations = "POST /reservations"
+	routeGetReservation   = "GET /reservations/{requestId}"
+	pathParamRequestID    = "requestId"
+)
 
 type handler struct {
 	log *slog.Logger
+	svc *reservations.Service
 }
 
 func main() {
-	h := &handler{log: slog.New(slog.NewJSONHandler(os.Stdout, nil))}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	svc, err := newService(context.Background())
+	if err != nil {
+		log.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	h := &handler{log: log, svc: svc}
 	lambda.Start(h.handle)
 }
 
-func (h *handler) handle(_ context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func newService(ctx context.Context) (*reservations.Service, error) {
+	tables, err := storage.TableNamesFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	queueURL, err := queue.URLFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	store := storage.NewStore(dynamodb.NewFromConfig(cfg), tables)
+	publisher := queue.NewPublisher(sqs.NewFromConfig(cfg), queueURL)
+	return reservations.NewService(store, publisher, store), nil
+}
+
+func (h *handler) handle(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	// The authorizer validated the token before this Lambda ran. The trainer identity is the sub
 	// claim and nothing else; it is never read from the body, path or query string.
 	trainerID := trainerIDFrom(req)
@@ -38,8 +73,12 @@ func (h *handler) handle(_ context.Context, req events.APIGatewayV2HTTPRequest) 
 	}
 
 	switch req.RouteKey {
+	case routeGetCards:
+		return h.getCards(ctx), nil
 	case routePostReservations:
-		return h.postReservation(req, trainerID), nil
+		return h.postReservation(ctx, req, trainerID), nil
+	case routeGetReservation:
+		return h.getReservation(ctx, req, trainerID), nil
 	default:
 		// An unrouted request never reaches the Lambda, so this means the gateway and the
 		// handler disagree about the routes.
@@ -56,7 +95,17 @@ func trainerIDFrom(req events.APIGatewayV2HTTPRequest) string {
 	return auth.JWT.Claims["sub"]
 }
 
-func (h *handler) postReservation(req events.APIGatewayV2HTTPRequest, _ string) events.APIGatewayV2HTTPResponse {
+func (h *handler) getCards(ctx context.Context) events.APIGatewayV2HTTPResponse {
+	cards, err := h.svc.Cards(ctx)
+	if err != nil {
+		return h.fail(err)
+	}
+	return jsonResponse(http.StatusOK, struct {
+		Cards []reservations.Card `json:"cards"`
+	}{Cards: cards})
+}
+
+func (h *handler) postReservation(ctx context.Context, req events.APIGatewayV2HTTPRequest, trainerID string) events.APIGatewayV2HTTPResponse {
 	body := []byte(req.Body)
 	if req.IsBase64Encoded {
 		decoded, err := base64.StdEncoding.DecodeString(req.Body)
@@ -66,21 +115,39 @@ func (h *handler) postReservation(req events.APIGatewayV2HTTPRequest, _ string) 
 		body = decoded
 	}
 
-	if _, err := reservations.ParseSubmit(body); err != nil {
-		return fromError(err)
+	submit, err := reservations.ParseSubmit(body)
+	if err != nil {
+		return h.fail(err)
 	}
-
-	// TEMPORARY (removed by the next commit): there is no queue yet, so a valid request cannot be
-	// accepted. It must never return 202, which means "queued".
-	return errorResponse(http.StatusNotImplemented, "NOT_IMPLEMENTED", "queuing is not available yet")
+	// 202 means queued: Submit only returns success after the queue accepted the message.
+	accepted, err := h.svc.Submit(ctx, trainerID, submit)
+	if err != nil {
+		return h.fail(err)
+	}
+	return jsonResponse(http.StatusAccepted, accepted)
 }
 
-func fromError(err error) events.APIGatewayV2HTTPResponse {
-	var apiErr *reservations.Error
-	if errors.As(err, &apiErr) {
-		return errorResponse(statusFor(apiErr.Code), apiErr.Code, apiErr.Message)
+func (h *handler) getReservation(ctx context.Context, req events.APIGatewayV2HTTPRequest, trainerID string) events.APIGatewayV2HTTPResponse {
+	r, err := h.svc.Status(ctx, trainerID, req.PathParameters[pathParamRequestID])
+	if err != nil {
+		return h.fail(err)
 	}
-	return errorResponse(http.StatusInternalServerError, reservations.CodeInternal, "internal error")
+	return jsonResponse(http.StatusOK, r)
+}
+
+// fail maps an error to the docs/api.md error shape, logging the cause of server-side failures.
+// Causes never reach the client.
+func (h *handler) fail(err error) events.APIGatewayV2HTTPResponse {
+	var apiErr *reservations.Error
+	if !errors.As(err, &apiErr) {
+		h.log.Error("unexpected error", "err", err)
+		return errorResponse(http.StatusInternalServerError, reservations.CodeInternal, "internal error")
+	}
+	status := statusFor(apiErr.Code)
+	if status >= http.StatusInternalServerError {
+		h.log.Error("request failed", "code", apiErr.Code, "err", apiErr.Cause)
+	}
+	return errorResponse(status, apiErr.Code, apiErr.Message)
 }
 
 func statusFor(code reservations.Code) int {

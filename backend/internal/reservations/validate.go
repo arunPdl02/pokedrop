@@ -33,9 +33,14 @@ const (
 type Error struct {
 	Code    Code
 	Message string
+	// Cause is the underlying failure, kept for logs. It is never sent to clients.
+	Cause error
 }
 
 func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
+
+// Unwrap exposes Cause to errors.Is and errors.As.
+func (e *Error) Unwrap() error { return e.Cause }
 
 func invalid(msg string) *Error { return &Error{Code: CodeInvalidRequest, Message: msg} }
 

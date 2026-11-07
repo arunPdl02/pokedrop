@@ -9,6 +9,9 @@ import "time"
 type Status string
 
 const (
+	// StatusQueued is the response to POST /reservations only: the request is on the queue, not
+	// reserved.
+	StatusQueued Status = "QUEUED"
 	// StatusConfirmed means the worker recorded a successful reservation (terminal).
 	StatusConfirmed Status = "CONFIRMED"
 	// StatusSoldOut means the worker found insufficient stock (terminal, a normal outcome).
