@@ -5,9 +5,11 @@ A Go backend on AWS processes reservations asynchronously and protects inventory
 requests and retries. See [docs/PLAN.md](docs/PLAN.md) for the plan and [docs/api.md](docs/api.md)
 for the API contract.
 
-Status: Phase 2 (authentication and reservation API). Trainers can sign in, list cards, queue a
-reservation and read their own outcomes. Nothing consumes the queue yet (the worker is Phase 3) and
-there is no UI yet (Phase 4).
+Status: Phase 3 (inventory correctness). Trainers can sign in, list cards and queue a reservation;
+a worker Lambda turns each queued request into `CONFIRMED` or `SOLD_OUT` with one conditional
+DynamoDB transaction, so stock never goes negative and a repeated request ID never takes stock
+twice. Messages that keep failing move to a dead letter queue after 5 receives. There is no UI yet
+(Phase 4).
 
 ## Prerequisites
 
@@ -38,9 +40,10 @@ docs/            plan, API contract, decision log
 
 | Command | What it does |
 |---|---|
-| `make build` | Build the API Lambda, `go build` the backend and type-check `infra/` |
-| `make build-lambda` | Cross-compile the API Lambda (linux/arm64) into `backend/build/api`, which CDK packages |
-| `make test` | Build the Lambda, then gofmt check, `go vet`, `go test`, and the CDK assertion tests (all offline) |
+| `make build` | Build the Lambdas, `go build` the backend and type-check `infra/` |
+| `make build-lambda` | Cross-compile the API and worker Lambdas (linux/arm64) into `backend/build/{api,worker}`, which CDK packages |
+| `make test` | Build the Lambdas, then gofmt check, `go vet`, `go test`, and the CDK assertion tests (all offline) |
+| `make test-local` | Concurrency and duplicate tests against DynamoDB Local in a throwaway Docker container (needs Docker, not Java or AWS) |
 | `make deploy` | Deploy the `pokedrop-dev` stack with CDK |
 | `make hotswap` | Fast CDK deploy for Lambda code changes |
 | `make seed` | Write the three seed cards to the dev inventory table |
@@ -75,8 +78,8 @@ The API only accepts the access token. To check that it rejects an ID token (403
 
 ### Ownership fixture
 
-Only the Phase 3 worker writes real reservation outcomes, so until then
-`scripts/ownership-fixture.sh add` inserts one `CONFIRMED` reservation owned by the `make token` user
+The worker writes real outcomes now, but the fixture still gives a fixed request ID to test
+ownership with: `scripts/ownership-fixture.sh add` inserts one `CONFIRMED` reservation owned by the `make token` user
 (marked as a fixture) and `scripts/ownership-fixture.sh remove` deletes it. With a second user's token
 (`TEST_USER_EMAIL=... make token`) `GET /reservations/ffffffff-0000-4000-8000-000000000001` must return
 404 while the owner gets 200. It writes data to a dev table only and refuses `prod`.

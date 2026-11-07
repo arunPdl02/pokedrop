@@ -112,24 +112,33 @@ Also committed (one logical change each): `feat: provision trainer sign-in and a
 
 ## Phase 3 — Inventory correctness and duplicate handling (est. 1–1.5 h)
 
-- [ ] Inventory records keyed by card ID; reservation results keyed by trainer ID + request ID
-- [ ] Worker Lambda consumes SQS
-- [ ] One DynamoDB `TransactWriteItems`:
-  - [ ] Decrement stock only if stock ≥ 1
-  - [ ] Put confirmed reservation only if no outcome exists for that request (`attribute_not_exists`)
-- [ ] Duplicate message → return existing outcome without changing inventory
-- [ ] Retain outcome records through the retry/replay window
-- [ ] Insufficient stock → `SOLD_OUT` as a normal terminal outcome
-- [ ] Transaction conflicts, throttling and transient errors classified as retryable
-- [ ] Unit tests for the logic; concurrency test against DynamoDB Local
+- [x] Inventory records keyed by card ID; reservation results keyed by trainer ID + request ID
+- [x] Worker Lambda consumes SQS
+- [x] One DynamoDB `TransactWriteItems`:
+  - [x] Decrement stock only if stock ≥ 1
+  - [x] Put confirmed reservation only if no outcome exists for that request (`attribute_not_exists`)
+- [x] Duplicate message → return existing outcome without changing inventory
+- [x] Retain outcome records through the retry/replay window
+- [x] Insufficient stock → `SOLD_OUT` as a normal terminal outcome
+- [x] Transaction conflicts, throttling and transient errors classified as retryable
+- [x] Unit tests for the logic; concurrency test against DynamoDB Local
 
 **Commits**
-- [ ] `feat: reserve card inventory with conditional transactions`
-- [ ] `test: verify duplicate and concurrent reservation handling`
+- [x] `feat: reserve card inventory with conditional transactions`
+- [x] `test: verify duplicate and concurrent reservation handling`
+
+Also committed (one logical change each): `feat: add dead letter queue to reservation queue` and
+`feat: consume reservation queue with worker lambda` (DLQ and partial batch responses pulled
+forward from Phase 5), and `docs: record Phase 3 decisions and verification`.
 
 **Milestone**
-- [ ] Repeating one request leaves one reservation and one inventory decrement
-- [ ] Exhausting stock produces `SOLD_OUT`, never negative stock
+- [x] Repeating one request leaves one reservation and one inventory decrement
+- [x] Exhausting stock produces `SOLD_OUT`, never negative stock
+
+> Verified on `pokedrop-dev` (2026-11-07): one `requestId` posted 3 times → 3 queue messages, 1
+> `CONFIRMED` + 2 duplicates, one stored row, `card-001` 10 → 9. Three concurrent requests for
+> `card-003` (stock 1) → 1 `CONFIRMED`, 2 `SOLD_OUT`, raw `stock` 0. Queue and DLQ empty, no worker
+> warnings or errors.
 
 ---
 
@@ -163,8 +172,8 @@ Also committed (one logical change each): `feat: provision trainer sign-in and a
 
 ## Phase 5 — Failure recovery and operational visibility (est. 1.5–2 h)
 
-- [ ] SQS retries (`maxReceiveCount`), dead letter queue, visibility timeout ≥ 6× worker timeout
-- [ ] Partial batch responses (`ReportBatchItemFailures`)
+- [x] SQS retries (`maxReceiveCount`), dead letter queue, visibility timeout ≥ 6× worker timeout (done in Phase 3)
+- [x] Partial batch responses (`ReportBatchItemFailures`) (done in Phase 3)
 - [ ] Structured logs: requestId, cardId, outcome, duration
 - [ ] CloudWatch alarms: queue backlog age, DLQ messages, worker errors → SNS email
 - [ ] Dev-only failure flag that throws **after the transaction commits, before returning success**
