@@ -5,15 +5,17 @@ A Go backend on AWS processes reservations asynchronously and protects inventory
 requests and retries. See [docs/PLAN.md](docs/PLAN.md) for the plan and [docs/api.md](docs/api.md)
 for the API contract.
 
-Status: Phase 1 (repository, infrastructure and seed data). No API or UI yet.
+Status: Phase 2 (authentication and reservation API). Trainers can sign in, list cards, queue a
+reservation and read their own outcomes. Nothing consumes the queue yet (the worker is Phase 3) and
+there is no UI yet (Phase 4).
 
 ## Prerequisites
 
 - Go (see `backend/go.mod`), Node.js 22+, GNU Make
 - AWS CLI v2 with a profile named `pokedrop` (region `us-west-2`)
 - The account/region bootstrapped for CDK (`CDKToolkit` stack in us-west-2)
-- Optional: copy `.env.example` to `.env.local` (gitignored) for local secrets. Nothing in Phase 1
-  needs it.
+- For `make token`: copy `.env.example` to `.env.local` (gitignored) and set `TEST_USER_EMAIL` and
+  `TEST_USER_PASSWORD`. Nothing else needs it.
 
 Sign in before deploying or seeding. If a command fails with `ExpiredToken`, run:
 
@@ -25,10 +27,10 @@ aws login --profile pokedrop
 
 ```text
 frontend/        placeholder until Phase 4
-backend/         Go module: cmd/ (thin Lambda entry points, seed), internal/ (rules, storage)
+backend/         Go module: cmd/ (api Lambda, seed, token), internal/ (reservation rules, storage, queue)
 infra/           CDK app (TypeScript)
 tests/load/      load tests (Phase 6)
-scripts/         helper scripts
+scripts/         helper scripts (ownership-fixture.sh)
 docs/            plan, API contract, decision log
 ```
 
@@ -36,15 +38,23 @@ docs/            plan, API contract, decision log
 
 | Command | What it does |
 |---|---|
-| `make build` | `go build` the backend and type-check `infra/` |
-| `make test` | gofmt check, `go vet`, `go test`, and the CDK assertion tests (all offline) |
+| `make build` | Build the API Lambda, `go build` the backend and type-check `infra/` |
+| `make build-lambda` | Cross-compile the API Lambda (linux/arm64) into `backend/build/api`, which CDK packages |
+| `make test` | Build the Lambda, then gofmt check, `go vet`, `go test`, and the CDK assertion tests (all offline) |
 | `make deploy` | Deploy the `pokedrop-dev` stack with CDK |
-| `make hotswap` | Fast CDK deploy for Lambda changes (nothing to hotswap until Phase 2) |
+| `make hotswap` | Fast CDK deploy for Lambda code changes |
 | `make seed` | Write the three seed cards to the dev inventory table |
 | `make token` | Print an access token for the dev test user, creating the user on first use (see below) |
 
 All AWS targets use profile `pokedrop` and region `us-west-2`. Use `STAGE=test make deploy` for a
 separate stack (`pokedrop-test`).
+
+`make deploy` needs a terminal: CDK asks for confirmation before applying IAM and other
+security-sensitive changes and refuses to continue without a TTY. Run it from an interactive shell
+(in Claude Code, prefix it with `!`). Review `cd infra && npx cdk diff -c stage=dev` first.
+
+The values the frontend needs (API URL, Cognito IDs and domain) are in the stack outputs listed in
+[docs/api.md](docs/api.md#stack-outputs).
 
 ### Dev test token
 
@@ -62,6 +72,14 @@ curl -H "Authorization: Bearer $TOKEN" "$API_URL/cards"
 
 The API only accepts the access token. To check that it rejects an ID token (403), print one with
 `cd backend && go run ./cmd/token -type id`.
+
+### Ownership fixture
+
+Only the Phase 3 worker writes real reservation outcomes, so until then
+`scripts/ownership-fixture.sh add` inserts one `CONFIRMED` reservation owned by the `make token` user
+(marked as a fixture) and `scripts/ownership-fixture.sh remove` deletes it. With a second user's token
+(`TEST_USER_EMAIL=... make token`) `GET /reservations/ffffffff-0000-4000-8000-000000000001` must return
+404 while the owner gets 200. It writes data to a dev table only and refuses `prod`.
 
 ### Seeding
 
@@ -83,3 +101,7 @@ refuses to run without a terminal, so add `--force` to skip the prompt.
 Use `-c stage=test` for the test stack. This does not remove the shared `CDKToolkit` bootstrap stack
 or its S3 bucket, and it does not affect the account's AWS Budget; those live outside this app.
 Redeploy with `make deploy` and reseed with `make seed`.
+
+The user pool is destroyed with the stack, including test users (`make token` recreates them), and a
+recreated stack gets new Cognito IDs and a new hosted UI domain, so update the
+[stack outputs](docs/api.md#stack-outputs) after redeploying.

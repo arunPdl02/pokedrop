@@ -80,25 +80,31 @@ pokedrop/
 
 ## Phase 2 — Authentication and reservation API (est. 2–3 h)
 
-- [ ] Cognito user pool with hosted sign-in; app client using authorization code + PKCE; callback/logout URLs for `http://localhost:5173`
-- [ ] Separate dev-only app client allowing `ADMIN_USER_PASSWORD_AUTH`
-- [ ] HTTP API with JWT authorizer (required scopes) and CORS for `http://localhost:5173`
-- [ ] Trainer identity derived from the validated token's `sub` claim
-- [ ] Go API Lambda (`provided.al2023`, arm64) using AWS SDK for Go v2
-- [ ] Reservation = client-generated `requestId` (UUID) + `cardId`; frontend reuses the same ID on retry
-- [ ] `POST /reservations` returns **202 only after SQS accepts the message**
-- [ ] `GET /cards` and `GET /reservations/{requestId}`, scoped to the authenticated trainer
-- [ ] `make token`: create a dev test user if missing and print a token (password from `.env.local`)
-- [ ] Stack outputs needed by the frontend recorded in `docs/api.md`
+- [x] Cognito user pool with hosted sign-in; app client using authorization code + PKCE; callback/logout URLs for `http://localhost:5173`
+- [x] Separate dev-only app client allowing `ADMIN_USER_PASSWORD_AUTH`
+- [x] HTTP API with JWT authorizer (required scopes) and CORS for `http://localhost:5173`
+- [x] Trainer identity derived from the validated token's `sub` claim
+- [x] Go API Lambda (`provided.al2023`, arm64) using AWS SDK for Go v2
+- [x] Reservation = client-generated `requestId` (UUID) + `cardId`; frontend reuses the same ID on retry
+- [x] `POST /reservations` returns **202 only after SQS accepts the message**
+- [x] `GET /cards` and `GET /reservations/{requestId}`, scoped to the authenticated trainer
+- [x] `make token`: create a dev test user if missing and print a token (password from `.env.local`)
+- [x] Stack outputs needed by the frontend recorded in `docs/api.md`
 
 **Commits**
-- [ ] `feat: authenticate trainers and validate reservation requests`
-- [ ] `feat: enqueue reservations and expose catalog and status endpoints`
+- [x] `feat: authenticate trainers and validate reservation requests`
+- [x] `feat: enqueue reservations and expose catalog and status endpoints`
+
+Also committed (one logical change each): `feat: provision trainer sign-in and app clients`, `feat: add make token for dev test users`, and `docs: record stack outputs and Phase 2 decisions`.
 
 **Milestone**
-- [ ] Unauthenticated requests get 401
-- [ ] An authenticated request reaches SQS; invalid requests are rejected
-- [ ] Reservation reads enforce ownership
+- [x] Unauthenticated requests get 401
+- [x] An authenticated request reaches SQS; invalid requests are rejected
+- [x] Reservation reads enforce ownership
+
+> **Not verified in Phase 2:** the browser authorization-code + PKCE exchange. Only the hosted sign-in
+> page and the redirect rules (registered `redirect_uri` accepted, others refused, implicit flow
+> refused) were checked. It stays unverified until Phase 4 signs in from the real frontend.
 
 > After Phase 2: run Phase 4 in a parallel worktree (`phase-4-frontend`) that edits only `frontend/`.
 

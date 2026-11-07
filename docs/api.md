@@ -169,12 +169,41 @@ yet processed returns `404 RESERVATION_NOT_FOUND`. Clients that hold the `reques
 
 ## Stack outputs
 
-Needed by the frontend and `make token`. Values are recorded here in Phase 2.
+Needed by the frontend and `make token`. These are values of the deployed **`pokedrop-dev`** stack
+(region `us-west-2`), recorded at the end of Phase 2. They are identifiers, not secrets.
 
 | Output | Value |
 |---|---|
-| `ApiUrl` | _TBD (Phase 2)_ |
-| `UserPoolId` | _TBD (Phase 2)_ |
-| `UserPoolClientId` (PKCE, frontend) | _TBD (Phase 2)_ |
-| `DevClientId` (dev-only, `ADMIN_USER_PASSWORD_AUTH`) | _TBD (Phase 2)_ |
-| `HostedUiDomain` | _TBD (Phase 2)_ |
+| `ApiUrl` | `https://t03xlkdsne.execute-api.us-west-2.amazonaws.com` |
+| `UserPoolId` | `us-west-2_QmYcPxWp8` |
+| `UserPoolClientId` (PKCE, frontend) | `424drtu0e1eeul6lq8kn6lo82u` |
+| `DevClientId` (dev-only, `ADMIN_USER_PASSWORD_AUTH`; `make token` only, not for the frontend) | `3u4upnq7tgi2r1v1bvhfug78vk` |
+| `HostedUiDomain` | `pokedrop-dev-0affe45b88e7.auth.us-west-2.amazoncognito.com` |
+
+These change if the stack is destroyed and recreated (the hosted UI domain suffix comes from the
+stack ID). Re-read them with:
+
+```sh
+aws cloudformation describe-stacks --stack-name pokedrop-dev --profile pokedrop --region us-west-2 \
+  --query "Stacks[0].Outputs" --output table
+```
+
+The stack also outputs `InventoryTableName`, `ReservationsTableName` and `ReservationQueueUrl`;
+those are for the backend and tooling, not the frontend.
+
+### Frontend sign-in settings
+
+For the PKCE client (`UserPoolClientId`), against `https://<HostedUiDomain>`:
+
+| Setting | Value |
+|---|---|
+| Authorize endpoint | `/oauth2/authorize` |
+| Token endpoint | `/oauth2/token` |
+| Logout endpoint | `/logout` |
+| `response_type` | `code`, with PKCE `code_challenge_method=S256` (implicit flow is disabled) |
+| `scope` | `openid email aws.cognito.signin.user.admin` (the last one is required by the API) |
+| `redirect_uri` / `logout_uri` | exactly `http://localhost:5173` (no path) |
+| Token to send to the API | the **access token** (an ID token gets `403`) |
+
+> The browser authorization-code + PKCE exchange has not been run end to end yet: Phase 2 verified
+> the hosted sign-in page and the redirect rules only. Phase 4 is the first real use of it.
