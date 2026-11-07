@@ -3,7 +3,11 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build build-lambda test deploy hotswap seed token
+.PHONY: build build-lambda test test-local deploy hotswap seed token
+
+DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
+DYNAMODB_LOCAL_PORT ?= 8000
+DYNAMODB_LOCAL_NAME = pokedrop-dynamodb-local
 
 build: build-lambda
 	cd backend && go build ./...
@@ -23,6 +27,13 @@ test: build-lambda
 	cd backend && go vet ./...
 	cd backend && go test ./...
 	cd infra && npm test --silent
+
+# Concurrency and duplicate tests against DynamoDB Local (needs Docker, not Java or AWS). Starts a
+# throwaway in-memory container, runs the `dynamodblocal`-tagged tests, and always removes it.
+test-local:
+	docker run -d --rm --name $(DYNAMODB_LOCAL_NAME) -p 127.0.0.1:$(DYNAMODB_LOCAL_PORT):8000 $(DYNAMODB_LOCAL_IMAGE) -jar DynamoDBLocal.jar -inMemory >/dev/null
+	cd backend && DYNAMODB_LOCAL_ENDPOINT=http://localhost:$(DYNAMODB_LOCAL_PORT) go test -count=1 -tags dynamodblocal -run '^TestLocal' -v ./internal/storage/; \
+		status=$$?; docker stop $(DYNAMODB_LOCAL_NAME) >/dev/null; exit $$status
 
 # Full deploy through CDK (the only way resources are created or changed).
 # CDK prompts before applying IAM/security-group changes.
