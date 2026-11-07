@@ -7,6 +7,19 @@ export interface StoredReservation {
   requestId: string;
   cardId: string;
   submittedAt: string;
+  /** Set once the worker's terminal result has been read. Absent means still queued. */
+  outcome?: StoredOutcome;
+}
+
+export interface StoredOutcome {
+  status: "CONFIRMED" | "SOLD_OUT";
+  updatedAt: string;
+}
+
+function isOutcome(value: unknown): value is StoredOutcome {
+  if (typeof value !== "object" || value === null) return false;
+  const outcome = value as Record<string, unknown>;
+  return (outcome.status === "CONFIRMED" || outcome.status === "SOLD_OUT") && typeof outcome.updatedAt === "string";
 }
 
 const MAX_RECORDS = 100;
@@ -19,7 +32,8 @@ function isStored(value: unknown): value is StoredReservation {
   return (
     typeof record.requestId === "string" &&
     typeof record.cardId === "string" &&
-    typeof record.submittedAt === "string"
+    typeof record.submittedAt === "string" &&
+    (record.outcome === undefined || isOutcome(record.outcome))
   );
 }
 
@@ -47,6 +61,15 @@ export function addAccepted(sub: string, record: StoredReservation): StoredReser
   const current = loadReservations(sub);
   if (current.some((existing) => existing.requestId === record.requestId)) return current;
   const next = [...current, record].slice(-MAX_RECORDS);
+  save(sub, next);
+  return next;
+}
+
+/** Record the terminal outcome of a known request. Returns the new list. */
+export function recordOutcome(sub: string, requestId: string, outcome: StoredOutcome): StoredReservation[] {
+  const next = loadReservations(sub).map((record) =>
+    record.requestId === requestId ? { ...record, outcome } : record,
+  );
   save(sub, next);
   return next;
 }

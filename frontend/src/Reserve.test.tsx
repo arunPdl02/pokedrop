@@ -27,6 +27,8 @@ function stubApi(...replies: PostReply[]) {
       if (reply instanceof Error) return Promise.reject(reply);
       return Promise.resolve(typeof reply === "function" ? reply(body) : reply);
     }
+    // Status polling is covered in Status.test.tsx; here the request just has no outcome yet.
+    if (url.includes("/reservations/")) return Promise.resolve(failure(404, "RESERVATION_NOT_FOUND"));
     throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);

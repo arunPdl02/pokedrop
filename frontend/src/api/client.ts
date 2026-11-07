@@ -147,6 +147,38 @@ export async function postReservation(
   return { requestId, status: "QUEUED" };
 }
 
+export interface ReservationOutcome {
+  status: "CONFIRMED" | "SOLD_OUT";
+  /** When the worker recorded the outcome (RFC 3339). */
+  updatedAt: string;
+}
+
+/**
+ * GET /reservations/{requestId}. Resolves to null while the request has no outcome yet: only the
+ * worker writes outcome records, so a queued-but-unprocessed request answers 404
+ * RESERVATION_NOT_FOUND, which means "still queued", not "failed".
+ */
+export async function getReservation(
+  accessToken: string,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<ReservationOutcome | null> {
+  let body: unknown;
+  try {
+    body = await apiRequest(`/reservations/${encodeURIComponent(requestId)}`, accessToken, { signal });
+  } catch (error) {
+    if (error instanceof ApiError && error.kind === "not_found" && error.code === "RESERVATION_NOT_FOUND") {
+      return null;
+    }
+    throw error;
+  }
+  const { status, updatedAt } = (body ?? {}) as { status?: unknown; updatedAt?: unknown };
+  if ((status !== "CONFIRMED" && status !== "SOLD_OUT") || typeof updatedAt !== "string") {
+    throw new ApiError("unknown", "The reservation response had an unexpected shape.");
+  }
+  return { status, updatedAt };
+}
+
 /** A message suitable for showing to a trainer. */
 export function describeApiError(error: unknown): string {
   if (!(error instanceof ApiError)) return "Something went wrong.";

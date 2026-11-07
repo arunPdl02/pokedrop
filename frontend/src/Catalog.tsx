@@ -2,7 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { describeApiError, type Card } from "./api/client";
 import { useApi } from "./api/useApi";
 import { useAuth } from "./auth/AuthProvider";
-import { useReservations } from "./reservations/useReservations";
+import { useReservations, type ReservationStatus } from "./reservations/useReservations";
+
+const STATUS_LABEL: Record<ReservationStatus, string> = {
+  QUEUED: "Queued",
+  CONFIRMED: "Confirmed",
+  SOLD_OUT: "Sold out",
+  DELAYED: "Delayed",
+};
 
 type CatalogState =
   | { status: "loading" }
@@ -13,9 +20,11 @@ export function Catalog() {
   const api = useApi();
   const { state: auth } = useAuth();
   const sub = auth.status === "signedIn" ? auth.sub : "";
-  const { actionFor, reservationFor, reserve } = useReservations(api, sub);
-  const [state, setState] = useState<CatalogState>({ status: "loading" });
   const [reloads, setReloads] = useState(0);
+  const reload = useCallback(() => setReloads((n) => n + 1), []);
+  // Stock changes when a reservation settles, so refresh the catalog then.
+  const { actionFor, reservationFor, reserve, checkAgain } = useReservations(api, sub, { onOutcome: reload });
+  const [state, setState] = useState<CatalogState>({ status: "loading" });
 
   useEffect(() => {
     if (!api) return;
@@ -30,8 +39,6 @@ export function Catalog() {
     );
     return () => controller.abort();
   }, [api, reloads]);
-
-  const reload = useCallback(() => setReloads((n) => n + 1), []);
 
   if (state.status === "loading") return <p>Loading cards…</p>;
   if (state.status === "error") {
@@ -49,22 +56,34 @@ export function Catalog() {
       <ul className="cards">
         {state.cards.map((card) => {
           const action = actionFor(card.cardId);
-          const queued = reservationFor(card.cardId) !== undefined;
+          const reservation = reservationFor(card.cardId);
+          // Queued and Delayed requests may still complete, so no second request for the card yet.
+          const active = reservation?.status === "QUEUED" || reservation?.status === "DELAYED";
           const submitting = action.kind === "submitting";
           return (
             <li key={card.cardId} className="card">
               <h2>{card.name}</h2>
               <p className="rarity">{card.rarity}</p>
               <p className="available">{card.available} available</p>
-              {queued && (
-                <p className="status" data-status="queued">
-                  Queued
+              {reservation && (
+                <p className="status" role="status" data-status={reservation.status}>
+                  {STATUS_LABEL[reservation.status]}
                 </p>
+              )}
+              {reservation?.status === "DELAYED" && (
+                <>
+                  <p>
+                    {reservation.problem ?? "This is taking longer than usual."} Your request has not been lost.
+                  </p>
+                  <button type="button" onClick={() => checkAgain(reservation.requestId)}>
+                    Check again
+                  </button>
+                </>
               )}
               {action.kind === "error" && <p role="alert">{action.message}</p>}
               <button
                 type="button"
-                disabled={submitting || queued}
+                disabled={submitting || active}
                 aria-busy={submitting}
                 onClick={() => void reserve(card.cardId)}
               >

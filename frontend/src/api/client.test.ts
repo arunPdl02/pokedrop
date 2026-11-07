@@ -1,6 +1,6 @@
 import { config } from "../config";
 import { ACCESS_TOKEN, CARDS, jsonResponse } from "../test-utils";
-import { ApiError, apiRequest, describeApiError, getCards } from "./client";
+import { ApiError, apiRequest, describeApiError, getCards, getReservation } from "./client";
 
 function stubFetch(response: Response | Error | DOMException) {
   const fetchMock = vi.fn(() => (response instanceof Response ? Promise.resolve(response) : Promise.reject(response)));
@@ -85,5 +85,45 @@ describe("error mapping", () => {
   it("tells the trainer to sign in again on 401 and flags a wrong token type on 403", () => {
     expect(describeApiError(new ApiError("unauthorized", "x", 401))).toMatch(/sign in again/i);
     expect(describeApiError(new ApiError("forbidden", "x", 403))).toMatch(/wrong token type/i);
+  });
+});
+
+describe("getReservation", () => {
+  const outcome = { requestId: "r-1", cardId: "card-001", status: "CONFIRMED", updatedAt: "2026-11-07T20:15:30Z" };
+
+  it("reads the outcome with the access token and an encoded path", async () => {
+    const fetchMock = stubFetch(jsonResponse(outcome));
+    await expect(getReservation(ACCESS_TOKEN, "r/1")).resolves.toEqual({
+      status: "CONFIRMED",
+      updatedAt: "2026-11-07T20:15:30Z",
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${config.apiUrl}/reservations/r%2F1`);
+    expect(init.headers).toEqual({ Authorization: `Bearer ${ACCESS_TOKEN}` });
+  });
+
+  it("reads a SOLD_OUT outcome", async () => {
+    stubFetch(jsonResponse({ ...outcome, status: "SOLD_OUT" }));
+    await expect(getReservation(ACCESS_TOKEN, "r-1")).resolves.toMatchObject({ status: "SOLD_OUT" });
+  });
+
+  it("treats 404 RESERVATION_NOT_FOUND as 'no outcome yet', not as an error", async () => {
+    stubFetch(jsonResponse({ error: { code: "RESERVATION_NOT_FOUND", message: "not found" } }, 404));
+    await expect(getReservation(ACCESS_TOKEN, "r-1")).resolves.toBeNull();
+  });
+
+  it("does not mistake a 404 from somewhere else for 'still queued'", async () => {
+    stubFetch(jsonResponse({ message: "Not Found" }, 404));
+    expect((await errorOf(getReservation(ACCESS_TOKEN, "r-1"))).kind).toBe("not_found");
+  });
+
+  it("rejects an outcome it does not know instead of guessing", async () => {
+    stubFetch(jsonResponse({ ...outcome, status: "EXPLODED" }));
+    expect((await errorOf(getReservation(ACCESS_TOKEN, "r-1"))).kind).toBe("unknown");
+  });
+
+  it("surfaces 401 so the session can end", async () => {
+    stubFetch(jsonResponse({ message: "Unauthorized" }, 401));
+    expect((await errorOf(getReservation(ACCESS_TOKEN, "r-1"))).kind).toBe("unauthorized");
   });
 });

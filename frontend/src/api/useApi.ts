@@ -4,14 +4,18 @@ import {
   ApiError,
   describeApiError,
   getCards,
+  getReservation,
   postReservation,
   type Card,
   type QueuedReservation,
+  type ReservationOutcome,
 } from "./client";
 
 export interface Api {
   getCards: (signal?: AbortSignal) => Promise<Card[]>;
   postReservation: (reservation: { requestId: string; cardId: string }) => Promise<QueuedReservation>;
+  /** Null while the request has no outcome yet (404 RESERVATION_NOT_FOUND). */
+  getReservation: (requestId: string, signal?: AbortSignal) => Promise<ReservationOutcome | null>;
 }
 
 /**
@@ -38,6 +42,7 @@ export function useApi(): Api | null {
     return {
       getCards: (signal) => guard(() => getCards(accessToken, signal)),
       postReservation: (reservation) => guard(() => postReservation(accessToken, reservation)),
+      getReservation: (requestId, signal) => guard(() => getReservation(accessToken, requestId, signal)),
     };
   }, [accessToken, expireSession]);
 }
