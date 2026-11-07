@@ -17,4 +17,8 @@ export const config = {
     // aws.cognito.signin.user.admin is required by the API's JWT authorizer.
     scope: "openid email aws.cognito.signin.user.admin",
   },
+  submission: {
+    // Waits between automatic retries of one submission; every attempt reuses the same requestId.
+    retryDelaysMs: [500, 1000, 2000],
+  },
 } as const;

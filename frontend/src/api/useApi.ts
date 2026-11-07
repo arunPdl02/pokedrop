@@ -1,9 +1,17 @@
 import { useMemo } from "react";
 import { useAuth } from "../auth/AuthProvider";
-import { ApiError, describeApiError, getCards, type Card } from "./client";
+import {
+  ApiError,
+  describeApiError,
+  getCards,
+  postReservation,
+  type Card,
+  type QueuedReservation,
+} from "./client";
 
 export interface Api {
   getCards: (signal?: AbortSignal) => Promise<Card[]>;
+  postReservation: (reservation: { requestId: string; cardId: string }) => Promise<QueuedReservation>;
 }
 
 /**
@@ -27,6 +35,9 @@ export function useApi(): Api | null {
         throw error;
       }
     };
-    return { getCards: (signal) => guard(() => getCards(accessToken, signal)) };
+    return {
+      getCards: (signal) => guard(() => getCards(accessToken, signal)),
+      postReservation: (reservation) => guard(() => postReservation(accessToken, reservation)),
+    };
   }, [accessToken, expireSession]);
 }

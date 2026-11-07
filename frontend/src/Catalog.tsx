@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { describeApiError, type Card } from "./api/client";
 import { useApi } from "./api/useApi";
+import { useAuth } from "./auth/AuthProvider";
+import { useReservations } from "./reservations/useReservations";
 
 type CatalogState =
   | { status: "loading" }
@@ -9,6 +11,9 @@ type CatalogState =
 
 export function Catalog() {
   const api = useApi();
+  const { state: auth } = useAuth();
+  const sub = auth.status === "signedIn" ? auth.sub : "";
+  const { actionFor, reservationFor, reserve } = useReservations(api, sub);
   const [state, setState] = useState<CatalogState>({ status: "loading" });
   const [reloads, setReloads] = useState(0);
 
@@ -42,17 +47,38 @@ export function Catalog() {
   return (
     <section aria-label="Cards">
       <ul className="cards">
-        {state.cards.map((card) => (
-          <li key={card.cardId} className="card">
-            <h2>{card.name}</h2>
-            <p className="rarity">{card.rarity}</p>
-            <p className="available">{card.available} available</p>
-            {/* Wired up in the next commit. */}
-            <button type="button" disabled>
-              Reserve
-            </button>
-          </li>
-        ))}
+        {state.cards.map((card) => {
+          const action = actionFor(card.cardId);
+          const queued = reservationFor(card.cardId) !== undefined;
+          const submitting = action.kind === "submitting";
+          return (
+            <li key={card.cardId} className="card">
+              <h2>{card.name}</h2>
+              <p className="rarity">{card.rarity}</p>
+              <p className="available">{card.available} available</p>
+              {queued && (
+                <p className="status" data-status="queued">
+                  Queued
+                </p>
+              )}
+              {action.kind === "error" && <p role="alert">{action.message}</p>}
+              <button
+                type="button"
+                disabled={submitting || queued}
+                aria-busy={submitting}
+                onClick={() => void reserve(card.cardId)}
+              >
+                {submitting
+                  ? action.attempt > 1
+                    ? `Retrying (${action.attempt}/${action.maxAttempts})…`
+                    : "Reserving…"
+                  : action.kind === "error" && action.canRetry
+                    ? "Try again"
+                    : "Reserve"}
+              </button>
+            </li>
+          );
+        })}
       </ul>
       <button type="button" onClick={reload}>
         Refresh

@@ -72,7 +72,13 @@ async function errorFrom(response: Response): Promise<ApiError> {
 export async function apiRequest(
   path: string,
   accessToken: string,
-  init: { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal } = {},
+  init: {
+    method?: "GET" | "POST";
+    body?: unknown;
+    signal?: AbortSignal;
+    /** A 2xx whose body cannot be read is still a success (the server accepted the request). */
+    tolerateUnreadableBody?: boolean;
+  } = {},
 ): Promise<unknown> {
   let response: Response;
   try {
@@ -92,6 +98,7 @@ export async function apiRequest(
   }
   if (!response.ok) throw await errorFrom(response);
   return response.json().catch(() => {
+    if (init.tolerateUnreadableBody) return null;
     throw new ApiError("unknown", "The server returned an unreadable response.", response.status);
   });
 }
@@ -115,6 +122,31 @@ export async function getCards(accessToken: string, signal?: AbortSignal): Promi
   return body.cards;
 }
 
+export interface QueuedReservation {
+  requestId: string;
+  status: "QUEUED";
+}
+
+/**
+ * POST /reservations. A 202 means the request was QUEUED, not reserved. Resending the same
+ * requestId is always safe; the worker never consumes inventory twice for one requestId.
+ */
+export async function postReservation(
+  accessToken: string,
+  reservation: { requestId: string; cardId: string },
+  signal?: AbortSignal,
+): Promise<QueuedReservation> {
+  const body = (await apiRequest("/reservations", accessToken, {
+    method: "POST",
+    body: reservation,
+    signal,
+    tolerateUnreadableBody: true,
+  })) as { requestId?: unknown } | null;
+  // The API lowercases the id; prefer its echo so what we store matches what we poll.
+  const requestId = typeof body?.requestId === "string" ? body.requestId : reservation.requestId;
+  return { requestId, status: "QUEUED" };
+}
+
 /** A message suitable for showing to a trainer. */
 export function describeApiError(error: unknown): string {
   if (!(error instanceof ApiError)) return "Something went wrong.";
@@ -129,6 +161,8 @@ export function describeApiError(error: unknown): string {
       return "Too many requests. Please wait a moment and try again.";
     case "server":
       return "The server had a problem. Please try again.";
+    case "not_found":
+      return error.code === "CARD_NOT_FOUND" ? "That card is no longer in the catalog." : error.message;
     default:
       return error.message;
   }
