@@ -27,6 +27,7 @@ test: build-lambda
 	cd backend && go vet ./...
 	cd backend && go test ./...
 	cd infra && npm test --silent
+	cd frontend && npm test --silent
 
 # Concurrency and duplicate tests against DynamoDB Local (needs Docker, not Java or AWS). Starts a
 # throwaway in-memory container, runs the `dynamodblocal`-tagged tests, and always removes it.
