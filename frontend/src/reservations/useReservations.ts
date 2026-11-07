@@ -3,7 +3,15 @@ import { ApiError, describeApiError } from "../api/client";
 import type { Api } from "../api/useApi";
 import { config } from "../config";
 import { pollForOutcome } from "./poll";
-import { addAccepted, loadReservations, recordOutcome, type StoredReservation } from "./store";
+import {
+  addAccepted,
+  clearPending,
+  loadPending,
+  loadReservations,
+  recordOutcome,
+  savePending,
+  type StoredReservation,
+} from "./store";
 import { submitWithRetry } from "./submit";
 
 /** What the Reserve button for one card is doing right now. */
@@ -64,13 +72,16 @@ export function useReservations(api: Api | null, sub: string, { onOutcome }: Opt
     [],
   );
 
-  const reserve = useCallback(
-    async (cardId: string) => {
-      if (!api || pending.current.has(cardId) || hasActive(cardId)) return;
+  /**
+   * Send one submission. The requestId is saved first, so if the page dies mid-request the next
+   * load can resend the SAME id (see the resume effect below).
+   */
+  const submit = useCallback(
+    async (cardId: string, requestId: string) => {
+      if (!api || pending.current.has(cardId)) return;
       pending.current.add(cardId);
-
-      const requestId = unfinished.current.get(cardId) ?? crypto.randomUUID();
       unfinished.current.set(cardId, requestId);
+      savePending(sub, { requestId, cardId, savedAt: new Date().toISOString() });
       const maxAttempts = config.submission.retryDelaysMs.length + 1;
       setAction(cardId, { kind: "submitting", attempt: 1, maxAttempts });
 
@@ -80,19 +91,49 @@ export function useReservations(api: Api | null, sub: string, { onOutcome }: Opt
           onRetry: (attempt) => setAction(cardId, { kind: "submitting", attempt, maxAttempts }),
         });
         unfinished.current.delete(cardId);
+        // Accepted first, pending cleared second: a crash in between leaves a harmless duplicate
+        // that the resume effect recognises (same requestId) and discards.
         commit(addAccepted(sub, { requestId: queued.requestId, cardId, submittedAt: new Date().toISOString() }));
+        clearPending(sub, cardId);
         setAction(cardId, IDLE);
       } catch (error) {
         const canRetry = error instanceof ApiError && error.retryable;
-        // A rejected request (400/404) is dead: the next click is a new submission.
-        if (!canRetry) unfinished.current.delete(cardId);
+        // A rejected request (400/401/403/404) was never queued, so it is dead: forget it and let the
+        // next click start a new submission. A transient failure leaves it unknown, so keep the id.
+        if (!canRetry) {
+          unfinished.current.delete(cardId);
+          clearPending(sub, cardId);
+        }
         setAction(cardId, { kind: "error", message: describeApiError(error), canRetry });
       } finally {
         pending.current.delete(cardId);
       }
     },
-    [api, sub, hasActive],
+    [api, sub],
   );
+
+  const reserve = useCallback(
+    (cardId: string) => {
+      if (!api || pending.current.has(cardId) || hasActive(cardId)) return Promise.resolve();
+      const saved = loadPending(sub, config.submission.pendingMaxAgeMs).find((p) => p.cardId === cardId);
+      return submit(cardId, unfinished.current.get(cardId) ?? saved?.requestId ?? crypto.randomUUID());
+    },
+    [api, sub, hasActive, submit],
+  );
+
+  // After a refresh, resend submissions whose outcome we never learned. Same requestId, so the
+  // server's idempotency makes this safe even if the first attempt did reach the queue.
+  useEffect(() => {
+    if (!api) return;
+    for (const { requestId, cardId } of loadPending(sub, config.submission.pendingMaxAgeMs)) {
+      const alreadyAccepted = reservationsRef.current.some((r) => r.requestId === requestId);
+      if (alreadyAccepted || hasActive(cardId)) {
+        clearPending(sub, cardId);
+        continue;
+      }
+      void submit(cardId, requestId);
+    }
+  }, [api, sub, hasActive, submit]);
 
   const startPolling = useCallback(
     (requestId: string) => {

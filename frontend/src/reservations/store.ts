@@ -73,3 +73,64 @@ export function recordOutcome(sub: string, requestId: string, outcome: StoredOut
   save(sub, next);
   return next;
 }
+
+/**
+ * A submission written BEFORE its POST is sent. If the page is closed or refreshed mid-request we
+ * cannot know whether the server queued it, so the next load resends it with the same requestId;
+ * the server is idempotent per requestId, so that can never reserve twice. It is removed once the
+ * API accepts it (it then lives in the accepted list) or definitively rejects it.
+ */
+export interface PendingSubmission {
+  requestId: string;
+  cardId: string;
+  savedAt: string;
+}
+
+const pendingKeyFor = (sub: string) => `pokedrop.pending.${sub}`;
+
+function isPending(value: unknown): value is PendingSubmission {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.requestId === "string" && typeof record.cardId === "string" && typeof record.savedAt === "string"
+  );
+}
+
+function readPending(sub: string): PendingSubmission[] {
+  try {
+    const raw = localStorage.getItem(pendingKeyFor(sub));
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isPending) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePending(sub: string, records: PendingSubmission[]): void {
+  try {
+    if (records.length === 0) localStorage.removeItem(pendingKeyFor(sub));
+    else localStorage.setItem(pendingKeyFor(sub), JSON.stringify(records));
+  } catch {
+    // Best effort: without storage the submission still goes out, it just cannot be resumed.
+  }
+}
+
+/** Pending submissions younger than `maxAgeMs`. Older ones are dropped from storage. */
+export function loadPending(sub: string, maxAgeMs: number, now = Date.now()): PendingSubmission[] {
+  const all = readPending(sub);
+  const fresh = all.filter((record) => now - Date.parse(record.savedAt) <= maxAgeMs);
+  if (fresh.length !== all.length) writePending(sub, fresh);
+  return fresh;
+}
+
+/** Remember a submission about to be sent. At most one per card; saving again replaces it. */
+export function savePending(sub: string, record: PendingSubmission): void {
+  writePending(sub, [...readPending(sub).filter((r) => r.cardId !== record.cardId), record]);
+}
+
+export function clearPending(sub: string, cardId: string): void {
+  writePending(
+    sub,
+    readPending(sub).filter((r) => r.cardId !== cardId),
+  );
+}

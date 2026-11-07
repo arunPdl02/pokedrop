@@ -26,5 +26,9 @@ export const config = {
   submission: {
     // Waits between automatic retries of one submission; every attempt reuses the same requestId.
     retryDelaysMs: [500, 1000, 2000],
+    // A submission whose outcome is unknown (page closed mid-POST, retries exhausted) is resent with
+    // the same requestId on the next load, but only this long: it is safe to resend at any age,
+    // yet a days-old click should not silently turn into a reservation.
+    pendingMaxAgeMs: 10 * 60 * 1000,
   },
 } as const;

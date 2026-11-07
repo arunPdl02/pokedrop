@@ -7,7 +7,7 @@ import { ACCESS_TOKEN, CARDS, jsonResponse, signInForTest } from "./test-utils";
 const pollConfig = vi.hoisted(() => ({ intervalsMs: [5] as number[], windowMs: 5000 }));
 vi.mock("./config", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config")>();
-  return { config: { ...actual.config, submission: { retryDelaysMs: [0, 0, 0] }, polling: pollConfig } };
+  return { config: { ...actual.config, submission: { ...actual.config.submission, retryDelaysMs: [0, 0, 0] }, polling: pollConfig } };
 });
 
 type StatusReply = Response | Error | Promise<Response>;
