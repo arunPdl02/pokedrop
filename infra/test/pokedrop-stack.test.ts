@@ -2,6 +2,7 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { PokedropStack } from '../lib/pokedrop-stack';
 import { serviceLogGroup } from '../lib/log-group';
+import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT } from '../lib/worker';
 
 function synth(stage: string): Template {
   const app = new App();
@@ -251,25 +252,55 @@ describe('PokedropStack API', () => {
 describe('PokedropStack queue', () => {
   const template = synth('dev');
 
-  test('has one encrypted standard queue', () => {
-    template.resourceCountIs('AWS::SQS::Queue', 1);
-    template.hasResourceProperties('AWS::SQS::Queue', { SqsManagedSseEnabled: true });
-    for (const queue of Object.values(template.findResources('AWS::SQS::Queue'))) {
+  const queues = () => template.findResources('AWS::SQS::Queue');
+  const logicalId = (prefix: string): string => {
+    const ids = Object.keys(queues()).filter((id) => id.startsWith(prefix));
+    if (ids.length !== 1) throw new Error(`expected one queue named ${prefix}*, got ${ids}`);
+    return ids[0] as string;
+  };
+  const queueNamed = (prefix: string): any => queues()[logicalId(prefix)];
+
+  test('has an encrypted standard reservation queue and dead letter queue', () => {
+    template.resourceCountIs('AWS::SQS::Queue', 2);
+    for (const queue of Object.values(queues())) {
+      expect(queue.Properties.SqsManagedSseEnabled).toBe(true);
       expect(queue.Properties.FifoQueue).toBeUndefined();
     }
   });
 
-  test('rejects non-TLS access', () => {
-    template.hasResourceProperties('AWS::SQS::QueuePolicy', {
-      PolicyDocument: {
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Effect: 'Deny',
-            Condition: { Bool: { 'aws:SecureTransport': 'false' } },
-          }),
-        ]),
-      },
+  test('rejects non-TLS access to both queues', () => {
+    const policies = Object.values(template.findResources('AWS::SQS::QueuePolicy'));
+    const tlsOnly = policies.filter((p) =>
+      p.Properties.PolicyDocument.Statement.some(
+        (s: { Effect: string; Condition?: { Bool?: Record<string, string> } }) =>
+          s.Effect === 'Deny' && s.Condition?.Bool?.['aws:SecureTransport'] === 'false',
+      ),
+    );
+    const protectedQueues = tlsOnly.flatMap((p) =>
+      p.Properties.Queues.map((q: { Ref: string }) => q.Ref),
+    );
+    expect(protectedQueues.sort()).toEqual(Object.keys(queues()).sort());
+  });
+
+  test('moves a message to the dead letter queue after 5 receives', () => {
+    const queue = queueNamed('ReservationQueue');
+    expect(queue.Properties.RedrivePolicy).toEqual({
+      deadLetterTargetArn: { 'Fn::GetAtt': [logicalId('ReservationDlq'), 'Arn'] },
+      maxReceiveCount: MAX_RECEIVE_COUNT,
     });
+    expect(MAX_RECEIVE_COUNT).toBe(5);
+  });
+
+  test('visibility timeout is six times the worker timeout', () => {
+    const queue = queueNamed('ReservationQueue');
+    expect(queue.Properties.VisibilityTimeout).toBe(6 * WORKER_TIMEOUT.toSeconds());
+    expect(queue.Properties.VisibilityTimeout).toBe(60);
+  });
+
+  test('dead letter queue keeps messages for 14 days', () => {
+    const dlq = queueNamed('ReservationDlq');
+    expect(dlq.Properties.MessageRetentionPeriod).toBe(14 * 24 * 60 * 60);
+    expect(dlq.Properties.RedrivePolicy).toBeUndefined();
   });
 
   test('is destroyed in dev and retained in prod', () => {
@@ -281,8 +312,9 @@ describe('PokedropStack queue', () => {
     }
   });
 
-  test('exposes the queue URL', () => {
+  test('exposes the queue URLs', () => {
     template.hasOutput('ReservationQueueUrl', { Value: Match.anyValue() });
+    template.hasOutput('ReservationDlqUrl', { Value: Match.anyValue() });
   });
 });
 

@@ -1,9 +1,10 @@
-import { CfnOutput, RemovalPolicy, Stack, StackProps, Tags } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps, Tags } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { Api } from './api';
 import { Auth } from './auth';
+import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT } from './worker';
 
 export interface PokedropStackProps extends StackProps {
   /** Deployment stage, e.g. `dev` or `test`. Everything except `prod` is destroyable. */
@@ -15,6 +16,7 @@ export class PokedropStack extends Stack {
   public readonly inventoryTable: Table;
   public readonly reservationsTable: Table;
   public readonly reservationQueue: Queue;
+  public readonly reservationDlq: Queue;
   public readonly auth: Auth;
   public readonly api: Api;
 
@@ -40,11 +42,21 @@ export class PokedropStack extends Stack {
 
     this.auth = new Auth(this, 'Auth', { stage: props.stage, removalPolicy });
 
-    // Standard queue: the worker is idempotent, so duplicate delivery is safe. The dead letter
-    // queue, retry limits and alarms arrive in Phase 5.
+    // Messages that fail MAX_RECEIVE_COUNT times land here, kept for the longest SQS allows so
+    // they can be inspected and replayed. Alarms on it arrive in Phase 5.
+    this.reservationDlq = new Queue(this, 'ReservationDlq', {
+      encryption: QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(14),
+      removalPolicy,
+    });
+
+    // Standard queue: the worker is idempotent, so duplicate delivery is safe.
     this.reservationQueue = new Queue(this, 'ReservationQueue', {
       encryption: QueueEncryption.SQS_MANAGED,
       enforceSSL: true,
+      visibilityTimeout: Duration.seconds(WORKER_TIMEOUT.toSeconds() * 6),
+      deadLetterQueue: { queue: this.reservationDlq, maxReceiveCount: MAX_RECEIVE_COUNT },
       removalPolicy,
     });
 
@@ -59,6 +71,7 @@ export class PokedropStack extends Stack {
     new CfnOutput(this, 'InventoryTableName', { value: this.inventoryTable.tableName });
     new CfnOutput(this, 'ReservationsTableName', { value: this.reservationsTable.tableName });
     new CfnOutput(this, 'ReservationQueueUrl', { value: this.reservationQueue.queueUrl });
+    new CfnOutput(this, 'ReservationDlqUrl', { value: this.reservationDlq.queueUrl });
     new CfnOutput(this, 'ApiUrl', { value: this.api.httpApi.apiEndpoint });
     new CfnOutput(this, 'UserPoolId', { value: this.auth.userPool.userPoolId });
     new CfnOutput(this, 'UserPoolClientId', { value: this.auth.userPoolClient.userPoolClientId });
