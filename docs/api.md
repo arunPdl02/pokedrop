@@ -206,5 +206,5 @@ For the PKCE client (`UserPoolClientId`), against `https://<HostedUiDomain>`:
 | `redirect_uri` / `logout_uri` | exactly `http://localhost:5173` (no path) |
 | Token to send to the API | the **access token** (an ID token gets `403`) |
 
-> The browser authorization-code + PKCE exchange has not been run end to end yet: Phase 2 verified
-> the hosted sign-in page and the redirect rules only. Phase 4 is the first real use of it.
+> The browser authorization-code + PKCE exchange was verified in Phase 4, by signing in from the real
+> frontend. Phase 2 had checked only the hosted sign-in page and the redirect rules.

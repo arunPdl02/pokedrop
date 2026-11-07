@@ -102,9 +102,9 @@ Also committed (one logical change each): `feat: provision trainer sign-in and a
 - [x] An authenticated request reaches SQS; invalid requests are rejected
 - [x] Reservation reads enforce ownership
 
-> **Not verified in Phase 2:** the browser authorization-code + PKCE exchange. Only the hosted sign-in
-> page and the redirect rules (registered `redirect_uri` accepted, others refused, implicit flow
-> refused) were checked. It stays unverified until Phase 4 signs in from the real frontend.
+> **Not verified in Phase 2, verified in Phase 4:** the browser authorization-code + PKCE exchange.
+> Phase 2 checked only the hosted sign-in page and the redirect rules (registered `redirect_uri`
+> accepted, others refused, implicit flow refused). Phase 4 signed in from the real frontend.
 
 > After Phase 2: run Phase 4 in a parallel worktree (`phase-4-frontend`) that edits only `frontend/`.
 
@@ -144,13 +144,13 @@ forward from Phase 5), and `docs: record Phase 3 decisions and verification`.
 
 ## Phase 4 — Trainer dashboard (est. 2–3 h, parallel worktree)
 
-- [ ] React + TypeScript + Vite in `frontend/`
-- [ ] Cognito hosted sign-in (PKCE) and authenticated API calls
-- [ ] Three card listings with quantities, reserve button and reservation status
-- [ ] One request ID per submission, reused across network retries
-- [ ] Accepted request IDs kept in localStorage so a refresh can still check them
-- [ ] Bounded polling with increasing intervals; a timeout is never shown as sold out
-- [ ] States displayed:
+- [x] React + TypeScript + Vite in `frontend/`
+- [x] Cognito hosted sign-in (PKCE) and authenticated API calls
+- [x] Three card listings with quantities, reserve button and reservation status
+- [x] One request ID per submission, reused across network retries
+- [x] Accepted request IDs kept in localStorage so a refresh can still check them
+- [x] Bounded polling with increasing intervals; a timeout is never shown as sold out
+- [x] States displayed:
 
   | State | Meaning |
   |---|---|
@@ -159,14 +159,23 @@ forward from Phase 5), and `docs: record Phase 3 decisions and verification`.
   | Sold out | The worker recorded insufficient inventory |
   | Delayed | Processing exceeded the normal polling window (UI-only) |
 
-- [ ] Vitest tests: submission, duplicate clicks, status updates, API errors
+- [x] Vitest tests: submission, duplicate clicks, status updates, API errors
 
 **Commits**
-- [ ] `feat: build trainer catalog and sign in flow`
-- [ ] `feat: display reservation progress and outcomes`
+- [x] `feat: build trainer catalog and sign in flow`
+- [x] `feat: display reservation progress and outcomes`
+
+Also committed (one logical change each): `chore: scaffold frontend with Vite React and strict
+TypeScript`, `feat: sign trainers in with Cognito PKCE`, `feat: submit reservations with stable
+request ids`, `fix: resend interrupted reservation submissions after a refresh`, and
+`test: run frontend tests in make test`.
 
 **Milestone**
-- [ ] A trainer can sign in, reserve a card, and see the persisted result
+- [x] A trainer can sign in, reserve a card, and see the persisted result
+
+> Verified on `pokedrop-dev` (2026-11-07) from `http://localhost:5173` with `npm run dev`: hosted
+> sign-in with authorization code + PKCE, a card reserved, and the persisted result shown. This also
+> closes the PKCE gap left open in Phase 2.
 
 ---
 
