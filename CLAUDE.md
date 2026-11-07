@@ -10,6 +10,7 @@ Plan: docs/PLAN.md · API contract: docs/api.md
   using the phase's commit messages.
 - When a phase is complete, end with a summary and remind me to run:
   `git tag phase-N && git push && git push --tags`
+- Before every deploy, run `npx cdk diff` as its own command, show me the IAM and resource changes, and wait for my approval. Never chain deploy with other commands.
 
 ## Invariants (never violate)
 - Stock never goes negative.
