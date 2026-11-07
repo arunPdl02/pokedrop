@@ -9,6 +9,29 @@ function synth(stage: string): Template {
   return Template.fromStack(new PokedropStack(app, `pokedrop-${stage}`, { stage }));
 }
 
+interface Grant {
+  actions: string[];
+  /** Logical IDs of the resources the statement refers to, e.g. `InventoryTable...`. */
+  resources: string[];
+}
+
+/** IAM statements attached to the role whose logical ID starts with `rolePrefix`. */
+function statementsForRole(template: Template, rolePrefix: string): Grant[] {
+  const grants: Grant[] = [];
+  for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
+    const roles: string[] = policy.Properties.Roles.map((r: { Ref: string }) => r.Ref);
+    if (!roles.some((r) => r.startsWith(rolePrefix))) continue;
+    for (const statement of policy.Properties.PolicyDocument.Statement) {
+      const resources = ([] as unknown[])
+        .concat(statement.Resource)
+        .map((r) => JSON.stringify(r).match(/"(Fn::GetAtt|Ref)":\[?"([A-Za-z0-9]+)"/)?.[2])
+        .filter((id): id is string => id !== undefined && id !== 'AWS');
+      grants.push({ actions: ([] as string[]).concat(statement.Action), resources });
+    }
+  }
+  return grants;
+}
+
 describe('PokedropStack', () => {
   const template = synth('dev');
 
@@ -223,12 +246,7 @@ describe('PokedropStack API', () => {
   });
 
   test('Lambda can only read the tables and send to the queue', () => {
-    const granted: string[] = [];
-    for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
-      for (const statement of policy.Properties.PolicyDocument.Statement) {
-        granted.push(...([] as string[]).concat(statement.Action));
-      }
-    }
+    const granted = statementsForRole(template, 'ApiFunctionServiceRole').flatMap((s) => s.actions);
     expect(granted.sort()).toEqual(
       [
         'dynamodb:GetItem',
@@ -315,6 +333,86 @@ describe('PokedropStack queue', () => {
   test('exposes the queue URLs', () => {
     template.hasOutput('ReservationQueueUrl', { Value: Match.anyValue() });
     template.hasOutput('ReservationDlqUrl', { Value: Match.anyValue() });
+  });
+});
+
+describe('PokedropStack worker', () => {
+  const template = synth('dev');
+  const resourcesStartingWith = (type: string, prefix: string) =>
+    Object.entries(template.findResources(type)).filter(([id]) => id.startsWith(prefix));
+  const workerFunction = () => {
+    const fns = resourcesStartingWith('AWS::Lambda::Function', 'WorkerFunction');
+    expect(fns).toHaveLength(1);
+    return (fns[0] as [string, { Properties: Record<string, unknown> }])[1].Properties;
+  };
+
+  test('is a Go custom runtime on arm64 with the shared timeout', () => {
+    expect(workerFunction()).toMatchObject({
+      Runtime: 'provided.al2023',
+      Architectures: ['arm64'],
+      Handler: 'bootstrap',
+      Timeout: WORKER_TIMEOUT.toSeconds(),
+    });
+    expect(WORKER_TIMEOUT.toSeconds()).toBe(10);
+  });
+
+  test('logs to its own one-week log group', () => {
+    const logGroup = (workerFunction().LoggingConfig as { LogGroup: { Ref: string } }).LogGroup.Ref;
+    expect(logGroup).toMatch(/^WorkerLogs/);
+    const groups = template.findResources('AWS::Logs::LogGroup');
+    expect(groups[logGroup]?.Properties.RetentionInDays).toBe(7);
+    expect(groups[logGroup]?.DeletionPolicy).toBe('Delete');
+  });
+
+  test('is configured with the table names only', () => {
+    const vars = (workerFunction().Environment as { Variables: Record<string, unknown> }).Variables;
+    expect(Object.keys(vars).sort()).toEqual(['INVENTORY_TABLE', 'RESERVATIONS_TABLE']);
+  });
+
+  test('consumes the reservation queue in batches of 10 with partial failures and capped concurrency', () => {
+    template.resourceCountIs('AWS::Lambda::EventSourceMapping', 1);
+    const [, mapping] = Object.entries(
+      template.findResources('AWS::Lambda::EventSourceMapping'),
+    )[0] as [string, { Properties: Record<string, unknown> }];
+    expect(mapping.Properties).toMatchObject({
+      BatchSize: 10,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      ScalingConfig: { MaximumConcurrency: 5 },
+    });
+    const arn = (mapping.Properties.EventSourceArn as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0];
+    expect(arn).toMatch(/^ReservationQueue/);
+    expect(arn).not.toMatch(/Dlq/);
+  });
+
+  test('can update inventory, put and get reservations, and consume the queue, nothing else', () => {
+    const grants = statementsForRole(template, 'WorkerFunctionServiceRole');
+    const byResource = (prefix: string) =>
+      grants
+        .filter((g) => g.resources.some((r) => r.startsWith(prefix)))
+        .flatMap((g) => g.actions)
+        .sort();
+
+    expect(byResource('InventoryTable')).toEqual(['dynamodb:UpdateItem']);
+    expect(byResource('ReservationsTable')).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem']);
+    expect(byResource('ReservationQueue')).toEqual(
+      [
+        'sqs:ChangeMessageVisibility',
+        'sqs:DeleteMessage',
+        'sqs:GetQueueAttributes',
+        'sqs:GetQueueUrl',
+        'sqs:ReceiveMessage',
+      ].sort(),
+    );
+    expect(byResource('ReservationDlq')).toEqual([]);
+
+    const all = grants.flatMap((g) => g.actions);
+    expect(all).toHaveLength(8);
+    for (const action of all) {
+      expect(action).not.toMatch(/SendMessage|Scan|Query|DeleteItem|Batch/);
+    }
+    for (const grant of grants) {
+      expect(grant.resources.length).toBeGreaterThan(0);
+    }
   });
 });
 

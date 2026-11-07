@@ -9,11 +9,14 @@ build: build-lambda
 	cd backend && go build ./...
 	cd infra && npm run --silent build
 
-# Cross-compile the API Lambda for provided.al2023 on arm64. CDK packages backend/build/api as the
-# function code, so it must exist before `cdk synth` (and therefore before the infra tests).
-# -trimpath and -s -w keep the binary reproducible so an unchanged build is not redeployed.
+# Cross-compile the Lambdas for provided.al2023 on arm64. CDK packages backend/build/<name> as the
+# function code, so they must exist before `cdk synth` (and therefore before the infra tests).
+# -trimpath and -s -w keep the binaries reproducible so an unchanged build is not redeployed.
+LAMBDA_BUILD = GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -trimpath -ldflags="-s -w"
+
 build-lambda:
-	cd backend && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -trimpath -ldflags="-s -w" -o build/api/bootstrap ./cmd/api
+	cd backend && $(LAMBDA_BUILD) -o build/api/bootstrap ./cmd/api
+	cd backend && $(LAMBDA_BUILD) -o build/worker/bootstrap ./cmd/worker
 
 test: build-lambda
 	@test -z "$$(gofmt -l backend)" || { echo "gofmt needed:"; gofmt -l backend; exit 1; }

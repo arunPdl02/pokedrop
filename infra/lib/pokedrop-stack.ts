@@ -4,7 +4,7 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { Api } from './api';
 import { Auth } from './auth';
-import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT } from './worker';
+import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT, Worker } from './worker';
 
 export interface PokedropStackProps extends StackProps {
   /** Deployment stage, e.g. `dev` or `test`. Everything except `prod` is destroyable. */
@@ -17,6 +17,7 @@ export class PokedropStack extends Stack {
   public readonly reservationsTable: Table;
   public readonly reservationQueue: Queue;
   public readonly reservationDlq: Queue;
+  public readonly worker: Worker;
   public readonly auth: Auth;
   public readonly api: Api;
 
@@ -62,6 +63,13 @@ export class PokedropStack extends Stack {
 
     this.api = new Api(this, 'Api', {
       auth: this.auth,
+      inventoryTable: this.inventoryTable,
+      reservationsTable: this.reservationsTable,
+      reservationQueue: this.reservationQueue,
+      removalPolicy,
+    });
+
+    this.worker = new Worker(this, 'Worker', {
       inventoryTable: this.inventoryTable,
       reservationsTable: this.reservationsTable,
       reservationQueue: this.reservationQueue,
