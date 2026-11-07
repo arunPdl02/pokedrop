@@ -195,10 +195,10 @@ func TestEnsureUserErrors(t *testing.T) {
 	})
 }
 
-func TestAccessToken(t *testing.T) {
+func TestSignIn(t *testing.T) {
 	t.Run("returns the access token using the admin password flow", func(t *testing.T) {
 		f := &fakeAPI{authOut: tokenOut("tok")}
-		got, err := accessToken(context.Background(), f, "p", "c", "e", "pw")
+		got, err := signIn(context.Background(), f, "p", "c", "e", "pw", kindAccess)
 		if err != nil || got != "tok" {
 			t.Fatalf("got %q %v", got, err)
 		}
@@ -208,23 +208,38 @@ func TestAccessToken(t *testing.T) {
 	})
 	t.Run("wrong password hints at .env.local without leaking it", func(t *testing.T) {
 		f := &fakeAPI{authErr: &types.NotAuthorizedException{}}
-		_, err := accessToken(context.Background(), f, "p", "c", "e", "s3cret-value")
+		_, err := signIn(context.Background(), f, "p", "c", "e", "s3cret-value", kindAccess)
 		if err == nil || !strings.Contains(err.Error(), envPassword) || strings.Contains(err.Error(), "s3cret-value") {
 			t.Fatalf("got %v", err)
 		}
 	})
 	t.Run("a challenge is an error", func(t *testing.T) {
 		f := &fakeAPI{authOut: &cognitoidentityprovider.AdminInitiateAuthOutput{ChallengeName: types.ChallengeNameTypeNewPasswordRequired}}
-		if _, err := accessToken(context.Background(), f, "p", "c", "e", "pw"); err == nil {
+		if _, err := signIn(context.Background(), f, "p", "c", "e", "pw", kindAccess); err == nil {
 			t.Fatal("expected error")
 		}
 	})
 	t.Run("no token is an error", func(t *testing.T) {
 		f := &fakeAPI{authOut: &cognitoidentityprovider.AdminInitiateAuthOutput{}}
-		if _, err := accessToken(context.Background(), f, "p", "c", "e", "pw"); err == nil {
+		if _, err := signIn(context.Background(), f, "p", "c", "e", "pw", kindAccess); err == nil {
 			t.Fatal("expected error")
 		}
 	})
+}
+
+func TestSignInTokenKinds(t *testing.T) {
+	out := &cognitoidentityprovider.AdminInitiateAuthOutput{
+		AuthenticationResult: &types.AuthenticationResultType{AccessToken: aws.String("acc"), IdToken: aws.String("idt")},
+	}
+	for kind, want := range map[string]string{kindAccess: "acc", kindID: "idt"} {
+		got, err := signIn(context.Background(), &fakeAPI{authOut: out}, "p", "c", "e", "pw", kind)
+		if err != nil || got != want {
+			t.Errorf("%s: got %q %v, want %q", kind, got, err, want)
+		}
+	}
+	if _, err := signIn(context.Background(), &fakeAPI{authOut: tokenOut("acc")}, "p", "c", "e", "pw", kindID); err == nil {
+		t.Error("a missing ID token must be an error, not an empty string")
+	}
 }
 
 func TestRequireOutputs(t *testing.T) {
@@ -241,7 +256,7 @@ func TestRequireOutputs(t *testing.T) {
 }
 
 func TestRunRefusesProd(t *testing.T) {
-	if _, err := run(context.Background(), "prod", "unused"); err == nil || !strings.Contains(err.Error(), "prod") {
+	if _, err := run(context.Background(), "prod", "unused", kindAccess); err == nil || !strings.Contains(err.Error(), "prod") {
 		t.Fatalf("got %v", err)
 	}
 }

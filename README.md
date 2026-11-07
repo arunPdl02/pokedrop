@@ -60,6 +60,9 @@ TOKEN=$(make -s token)
 curl -H "Authorization: Bearer $TOKEN" "$API_URL/cards"
 ```
 
+The API only accepts the access token. To check that it rejects an ID token (403), print one with
+`cd backend && go run ./cmd/token -type id`.
+
 ### Seeding
 
 `make seed` is idempotent: it writes each card unconditionally, so re-running **resets stock** to the

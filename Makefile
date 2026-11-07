@@ -3,13 +3,19 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build test deploy hotswap seed token
+.PHONY: build build-lambda test deploy hotswap seed token
 
-build:
+build: build-lambda
 	cd backend && go build ./...
 	cd infra && npm run --silent build
 
-test:
+# Cross-compile the API Lambda for provided.al2023 on arm64. CDK packages backend/build/api as the
+# function code, so it must exist before `cdk synth` (and therefore before the infra tests).
+# -trimpath and -s -w keep the binary reproducible so an unchanged build is not redeployed.
+build-lambda:
+	cd backend && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -trimpath -ldflags="-s -w" -o build/api/bootstrap ./cmd/api
+
+test: build-lambda
 	@test -z "$$(gofmt -l backend)" || { echo "gofmt needed:"; gofmt -l backend; exit 1; }
 	cd backend && go vet ./...
 	cd backend && go test ./...

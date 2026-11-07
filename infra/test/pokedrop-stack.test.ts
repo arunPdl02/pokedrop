@@ -129,6 +129,91 @@ describe('PokedropStack authentication', () => {
   });
 });
 
+describe('PokedropStack API', () => {
+  const template = synth('dev');
+
+  test('API Lambda is a Go custom runtime on arm64', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Runtime: 'provided.al2023',
+      Architectures: ['arm64'],
+      Handler: 'bootstrap',
+      Timeout: 10,
+    });
+  });
+
+  test('Lambda logs are retained for one week and deleted with the stack', () => {
+    template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+    for (const group of Object.values(template.findResources('AWS::Logs::LogGroup'))) {
+      expect(group.DeletionPolicy).toBe('Delete');
+    }
+  });
+
+  test('HTTP API allows CORS only from the local frontend', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      ProtocolType: 'HTTP',
+      CorsConfiguration: {
+        AllowOrigins: ['http://localhost:5173'],
+        AllowMethods: ['GET', 'POST', 'OPTIONS'],
+        AllowHeaders: ['Authorization', 'Content-Type'],
+      },
+    });
+  });
+
+  test('JWT authorizer trusts the user pool and both app clients', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
+    template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      AuthorizerType: 'JWT',
+      IdentitySource: ['$request.header.Authorization'],
+      JwtConfiguration: {
+        Issuer: Match.anyValue(),
+        Audience: [
+          { Ref: Match.stringLikeRegexp('FrontendClient') },
+          { Ref: Match.stringLikeRegexp('DevClient') },
+        ],
+      },
+    });
+  });
+
+  test('prod authorizer trusts only the frontend client', () => {
+    synth('prod').hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      JwtConfiguration: { Audience: [{ Ref: Match.stringLikeRegexp('FrontendClient') }] },
+    });
+  });
+
+  test('every route requires the JWT authorizer and the sign-in scope', () => {
+    const routes = Object.values(template.findResources('AWS::ApiGatewayV2::Route'));
+    expect(routes.length).toBeGreaterThan(0);
+    for (const route of routes) {
+      expect(route.Properties.AuthorizationType).toBe('JWT');
+      expect(route.Properties.AuthorizerId).toBeDefined();
+      expect(route.Properties.AuthorizationScopes).toEqual(['aws.cognito.signin.user.admin']);
+    }
+  });
+
+  test('routes are exactly the documented set', () => {
+    const keys = Object.values(template.findResources('AWS::ApiGatewayV2::Route'))
+      .map((r) => r.Properties.RouteKey)
+      .sort();
+    expect(keys).toEqual(['POST /reservations']);
+  });
+
+  test('no IAM policy grants wildcard actions', () => {
+    for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
+      for (const statement of policy.Properties.PolicyDocument.Statement) {
+        const actions = ([] as string[]).concat(statement.Action);
+        for (const action of actions) {
+          expect(action).not.toBe('*');
+          expect(action).not.toMatch(/:\*$/);
+        }
+      }
+    }
+  });
+
+  test('exposes the API URL', () => {
+    template.hasOutput('ApiUrl', { Value: Match.anyValue() });
+  });
+});
+
 describe('serviceLogGroup', () => {
   test('retains logs for one week and deletes with the stack', () => {
     const stack = new Stack();

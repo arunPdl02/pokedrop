@@ -12,13 +12,20 @@ request/response shapes; change it before changing the implementation.
 
 ## Auth rules
 
-- Every endpoint requires `Authorization: Bearer <Cognito token>`, validated by the API Gateway
-  JWT authorizer (required scope: **TBD in Phase 2**).
+- Every endpoint requires `Authorization: Bearer <Cognito access token>`, validated by the API
+  Gateway JWT authorizer (issuer = the user pool, audience = the app clients). The token must carry
+  the scope **`aws.cognito.signin.user.admin`**. The frontend requests it at sign-in; tokens from the
+  dev client (`make token`) carry it automatically. **ID tokens are rejected with `403`** (they have no
+  `scope` claim), so send the access token.
 - The trainer identity is the validated token's `sub` claim. It is never read from the request
   body, path or query string.
 - A trainer can read only their own reservations. Another trainer's `requestId` is
   indistinguishable from an unknown one (404).
-- Missing, expired or invalid tokens are rejected by the authorizer with `401` before any Lambda runs.
+- Missing, expired or invalid tokens are rejected by the authorizer with `401` before any Lambda
+  runs. A valid token without the required scope (for example an ID token) is rejected the same way
+  with `403`. As defence in depth the Lambda also returns
+  `401 UNAUTHORIZED` if a request reaches it without a `sub` claim; that cannot happen while every
+  route has the authorizer.
 
 ## Error shape
 
@@ -29,7 +36,7 @@ Errors returned by the Lambdas:
 ```
 
 `code` is stable and machine-readable; `message` is for humans and may change.
-Errors produced by API Gateway itself (`401`, `429`) use the gateway's default body
+Errors produced by API Gateway itself (`401`, `403`, `429`) use the gateway's default body
 (`{"message": "..."}`), so clients should branch on the HTTP status, not the body, for those.
 
 ## Status values
@@ -82,8 +89,11 @@ Validates a reservation request and queues it. One card per reservation.
 
 | Field | Type | Rules |
 |---|---|---|
-| `requestId` | string | Client-generated UUID. The frontend generates one per submission and **reuses it on retry**. |
-| `cardId` | string | Must exist in the catalog |
+| `requestId` | string | Client-generated UUID (any version, hyphenated). Case-insensitive: the API **normalizes it to lowercase** before queuing and in every response, so `ABC…` and `abc…` are the same request. The frontend generates one per submission and **reuses it on retry**. |
+| `cardId` | string | Non-empty, at most 64 characters, and must exist in the catalog |
+
+The body must be a single JSON object of at most 4096 bytes. Unknown fields are ignored; in
+particular the trainer identity is never taken from the body.
 
 **Response 202 Accepted**
 
@@ -101,7 +111,7 @@ Validates a reservation request and queues it. One card per reservation.
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `INVALID_REQUEST` | Malformed JSON, missing field, or `requestId` is not a UUID |
+| 400 | `INVALID_REQUEST` | Malformed JSON, body over 4096 bytes, missing field, or `requestId` is not a UUID |
 | 401 | — | Missing or invalid token |
 | 404 | `CARD_NOT_FOUND` | `cardId` is not in the catalog |
 | 503 | `QUEUE_UNAVAILABLE` | SQS did not accept the message. Nothing was queued; retry with the **same** `requestId`. |
@@ -149,6 +159,8 @@ yet processed returns `404 RESERVATION_NOT_FOUND`. Clients that hold the `reques
 |---|---|---|---|
 | 400 | `INVALID_REQUEST` | Lambda | No, fix the request |
 | 401 | — | Authorizer | No, sign in again |
+| 403 | — | Authorizer | No, send the access token with the required scope |
+| 401 | `UNAUTHORIZED` | Lambda | No (defence in depth, see [Auth rules](#auth-rules)) |
 | 404 | `CARD_NOT_FOUND` | Lambda | No |
 | 404 | `RESERVATION_NOT_FOUND` | Lambda | While polling a known `requestId` |
 | 429 | — | API Gateway throttling | Yes, with backoff |

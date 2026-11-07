@@ -132,8 +132,15 @@ func ensureUser(ctx context.Context, api userAPI, poolID, email, password string
 	return true, nil
 }
 
-// accessToken signs the user in with ADMIN_USER_PASSWORD_AUTH and returns the access token.
-func accessToken(ctx context.Context, api userAPI, poolID, clientID, email, password string) (string, error) {
+// Token kinds `make token` can print. The API requires the access token; the ID token exists so
+// the "ID tokens are rejected" rule in docs/api.md can be checked against a deployed stack.
+const (
+	kindAccess = "access"
+	kindID     = "id"
+)
+
+// signIn signs the user in with ADMIN_USER_PASSWORD_AUTH and returns the requested token kind.
+func signIn(ctx context.Context, api userAPI, poolID, clientID, email, password, kind string) (string, error) {
 	out, err := api.AdminInitiateAuth(ctx, &cognitoidentityprovider.AdminInitiateAuthInput{
 		UserPoolId:     aws.String(poolID),
 		ClientId:       aws.String(clientID),
@@ -150,10 +157,17 @@ func accessToken(ctx context.Context, api userAPI, poolID, clientID, email, pass
 	if out.ChallengeName != "" {
 		return "", fmt.Errorf("sign in needs a %s challenge, which make token cannot answer", out.ChallengeName)
 	}
-	if out.AuthenticationResult == nil || aws.ToString(out.AuthenticationResult.AccessToken) == "" {
-		return "", errors.New("sign in returned no access token")
+	if out.AuthenticationResult == nil {
+		return "", errors.New("sign in returned no tokens")
 	}
-	return aws.ToString(out.AuthenticationResult.AccessToken), nil
+	token := aws.ToString(out.AuthenticationResult.AccessToken)
+	if kind == kindID {
+		token = aws.ToString(out.AuthenticationResult.IdToken)
+	}
+	if token == "" {
+		return "", fmt.Errorf("sign in returned no %s token", kind)
+	}
+	return token, nil
 }
 
 // stackOutputs returns the outputs of a deployed stack as a map.
@@ -187,9 +201,14 @@ func requireOutputs(outputs map[string]string, stackName string) (poolID, client
 func main() {
 	stage := flag.String("stage", "dev", "stack stage (stack name: pokedrop-<stage>)")
 	envFile := flag.String("env-file", "../.env.local", "file with "+envEmail+" and "+envPassword)
+	kind := flag.String("type", kindAccess, "token to print: access (what the API requires) or id")
 	flag.Parse()
+	if *kind != kindAccess && *kind != kindID {
+		fmt.Fprintf(os.Stderr, "token: -type must be %q or %q\n", kindAccess, kindID)
+		os.Exit(2)
+	}
 
-	token, err := run(context.Background(), *stage, *envFile)
+	token, err := run(context.Background(), *stage, *envFile, *kind)
 	if err != nil {
 		if strings.Contains(err.Error(), "ExpiredToken") {
 			fmt.Fprintln(os.Stderr, expiredTokenGuidance)
@@ -200,7 +219,7 @@ func main() {
 	fmt.Println(token)
 }
 
-func run(ctx context.Context, stage, envFile string) (string, error) {
+func run(ctx context.Context, stage, envFile, kind string) (string, error) {
 	if stage == "prod" {
 		return "", errors.New("refusing to create test users or use the dev client on prod")
 	}
@@ -231,5 +250,5 @@ func run(ctx context.Context, stage, envFile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return accessToken(ctx, api, poolID, clientID, email, password)
+	return signIn(ctx, api, poolID, clientID, email, password, kind)
 }
