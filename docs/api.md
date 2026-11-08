@@ -188,9 +188,10 @@ aws cloudformation describe-stacks --stack-name pokedrop-dev --profile pokedrop 
   --query "Stacks[0].Outputs" --output table
 ```
 
-The stack also outputs `InventoryTableName`, `ReservationsTableName`, `ReservationQueueUrl` and
-`ReservationDlqUrl`;
-those are for the backend and tooling, not the frontend.
+The stack also outputs `InventoryTableName`, `ReservationsTableName`, `ReservationQueueUrl`,
+`ReservationDlqUrl`, `ReservationQueueArn`, `ReservationDlqArn`, `WorkerFunctionName`,
+`WorkerLogGroupName` and `AlarmTopicArn`; those are for the backend, tooling and
+[docs/runbook.md](runbook.md), not the frontend.
 
 ### Frontend sign-in settings
 

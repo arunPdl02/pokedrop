@@ -3,6 +3,7 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Architecture, Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { serviceLogGroup } from './log-group';
@@ -39,9 +40,12 @@ const WORKER_CODE_DIR = path.join(__dirname, '..', '..', 'backend', 'build', 'wo
 /** Go Lambda that turns queued reservation requests into CONFIRMED / SOLD_OUT outcomes. */
 export class Worker extends Construct {
   public readonly function: LambdaFunction;
+  public readonly logGroup: LogGroup;
 
   constructor(scope: Construct, id: string, props: WorkerProps) {
     super(scope, id);
+
+    this.logGroup = serviceLogGroup(this, 'Logs', props.removalPolicy);
 
     this.function = new LambdaFunction(this, 'Function', {
       runtime: Runtime.PROVIDED_AL2023,
@@ -50,7 +54,7 @@ export class Worker extends Construct {
       code: Code.fromAsset(WORKER_CODE_DIR),
       memorySize: 256,
       timeout: WORKER_TIMEOUT,
-      logGroup: serviceLogGroup(this, 'Logs', props.removalPolicy),
+      logGroup: this.logGroup,
       // Names mirror backend/internal/storage/schema.go.
       environment: {
         INVENTORY_TABLE: props.inventoryTable.tableName,

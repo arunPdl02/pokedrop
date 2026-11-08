@@ -4,11 +4,14 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { Api } from './api';
 import { Auth } from './auth';
+import { Monitoring } from './monitoring';
 import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT, Worker } from './worker';
 
 export interface PokedropStackProps extends StackProps {
   /** Deployment stage, e.g. `dev` or `test`. Everything except `prod` is destroyable. */
   readonly stage: string;
+  /** Receives the alarm emails (kept out of the repo; bin/app.ts reads ALARM_EMAIL). */
+  readonly alarmEmail: string;
 }
 
 /** Key and attribute names mirror backend/internal/storage/schema.go. */
@@ -20,6 +23,7 @@ export class PokedropStack extends Stack {
   public readonly worker: Worker;
   public readonly auth: Auth;
   public readonly api: Api;
+  public readonly monitoring: Monitoring;
 
   constructor(scope: Construct, id: string, props: PokedropStackProps) {
     super(scope, id, props);
@@ -44,7 +48,7 @@ export class PokedropStack extends Stack {
     this.auth = new Auth(this, 'Auth', { stage: props.stage, removalPolicy });
 
     // Messages that fail MAX_RECEIVE_COUNT times land here, kept for the longest SQS allows so
-    // they can be inspected and replayed. Alarms on it arrive in Phase 5.
+    // they can be inspected and replayed (docs/runbook.md).
     this.reservationDlq = new Queue(this, 'ReservationDlq', {
       encryption: QueueEncryption.SQS_MANAGED,
       enforceSSL: true,
@@ -76,10 +80,24 @@ export class PokedropStack extends Stack {
       removalPolicy,
     });
 
+    this.monitoring = new Monitoring(this, 'Monitoring', {
+      stage: props.stage,
+      alarmEmail: props.alarmEmail,
+      reservationQueue: this.reservationQueue,
+      reservationDlq: this.reservationDlq,
+      workerFunction: this.worker.function,
+      workerLogGroup: this.worker.logGroup,
+    });
+
     new CfnOutput(this, 'InventoryTableName', { value: this.inventoryTable.tableName });
     new CfnOutput(this, 'ReservationsTableName', { value: this.reservationsTable.tableName });
     new CfnOutput(this, 'ReservationQueueUrl', { value: this.reservationQueue.queueUrl });
     new CfnOutput(this, 'ReservationDlqUrl', { value: this.reservationDlq.queueUrl });
+    new CfnOutput(this, 'ReservationQueueArn', { value: this.reservationQueue.queueArn });
+    new CfnOutput(this, 'ReservationDlqArn', { value: this.reservationDlq.queueArn });
+    new CfnOutput(this, 'WorkerFunctionName', { value: this.worker.function.functionName });
+    new CfnOutput(this, 'WorkerLogGroupName', { value: this.worker.logGroup.logGroupName });
+    new CfnOutput(this, 'AlarmTopicArn', { value: this.monitoring.topic.topicArn });
     new CfnOutput(this, 'ApiUrl', { value: this.api.httpApi.apiEndpoint });
     new CfnOutput(this, 'UserPoolId', { value: this.auth.userPool.userPoolId });
     new CfnOutput(this, 'UserPoolClientId', { value: this.auth.userPoolClient.userPoolClientId });

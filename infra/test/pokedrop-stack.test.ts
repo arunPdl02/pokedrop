@@ -3,10 +3,13 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { PokedropStack } from '../lib/pokedrop-stack';
 import { serviceLogGroup } from '../lib/log-group';
 import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT } from '../lib/worker';
+import { BACKLOG_AGE_THRESHOLD } from '../lib/monitoring';
 
 function synth(stage: string): Template {
   const app = new App();
-  return Template.fromStack(new PokedropStack(app, `pokedrop-${stage}`, { stage }));
+  return Template.fromStack(
+    new PokedropStack(app, `pokedrop-${stage}`, { stage, alarmEmail: 'alarms@example.com' }),
+  );
 }
 
 interface Grant {
@@ -412,6 +415,160 @@ describe('PokedropStack worker', () => {
     }
     for (const grant of grants) {
       expect(grant.resources.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('PokedropStack monitoring', () => {
+  const template = synth('dev');
+  const topicId = () => {
+    const ids = Object.keys(template.findResources('AWS::SNS::Topic'));
+    expect(ids).toHaveLength(1);
+    return ids[0] as string;
+  };
+  const alarms = () =>
+    Object.values(template.findResources('AWS::CloudWatch::Alarm')).map((a) => a.Properties);
+  const alarmNamed = (name: string) => {
+    const found = alarms().filter((a) => a.AlarmName === `pokedrop-dev-${name}`);
+    expect(found).toHaveLength(1);
+    return found[0];
+  };
+
+  test('emails the alarm address through one TLS-only topic', () => {
+    template.resourceCountIs('AWS::SNS::Subscription', 1);
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'alarms@example.com',
+      TopicArn: { Ref: topicId() },
+    });
+    const [policy] = Object.values(template.findResources('AWS::SNS::TopicPolicy'));
+    const statements = policy?.Properties.PolicyDocument.Statement;
+    expect(statements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Effect: 'Deny',
+          Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+        }),
+        expect.objectContaining({
+          Effect: 'Allow',
+          Principal: { Service: 'cloudwatch.amazonaws.com' },
+          Action: 'sns:Publish',
+        }),
+      ]),
+    );
+  });
+
+  test('has exactly the four alarms, all notifying on alarm and recovery', () => {
+    expect(
+      alarms()
+        .map((a) => a.AlarmName)
+        .sort(),
+    ).toEqual(
+      [
+        'pokedrop-dev-dlq-messages',
+        'pokedrop-dev-queue-backlog-age',
+        'pokedrop-dev-worker-crashes',
+        'pokedrop-dev-worker-error-logs',
+      ].sort(),
+    );
+    for (const a of alarms()) {
+      expect(a.TreatMissingData).toBe('notBreaching');
+      expect(a.AlarmActions).toEqual([{ Ref: topicId() }]);
+      expect(a.OKActions).toEqual([{ Ref: topicId() }]);
+    }
+  });
+
+  test('backlog alarm fires when the oldest message stays 300 s old for 3 minutes', () => {
+    expect(alarmNamed('queue-backlog-age')).toMatchObject({
+      Namespace: 'AWS/SQS',
+      MetricName: 'ApproximateAgeOfOldestMessage',
+      Dimensions: [
+        {
+          Name: 'QueueName',
+          Value: { 'Fn::GetAtt': [expect.stringMatching(/^ReservationQueue/), 'QueueName'] },
+        },
+      ],
+      Statistic: 'Maximum',
+      Period: 60,
+      Threshold: 300,
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      EvaluationPeriods: 3,
+      DatapointsToAlarm: 3,
+    });
+    expect(BACKLOG_AGE_THRESHOLD.toSeconds()).toBeGreaterThanOrEqual(
+      MAX_RECEIVE_COUNT * 6 * WORKER_TIMEOUT.toSeconds(),
+    );
+  });
+
+  test('dead letter alarm fires on any visible message', () => {
+    expect(alarmNamed('dlq-messages')).toMatchObject({
+      Namespace: 'AWS/SQS',
+      MetricName: 'ApproximateNumberOfMessagesVisible',
+      Dimensions: [
+        {
+          Name: 'QueueName',
+          Value: { 'Fn::GetAtt': [expect.stringMatching(/^ReservationDlq/), 'QueueName'] },
+        },
+      ],
+      Statistic: 'Maximum',
+      Period: 60,
+      Threshold: 0,
+      ComparisonOperator: 'GreaterThanThreshold',
+      EvaluationPeriods: 1,
+    });
+  });
+
+  test('error log alarm counts ERROR lines in the worker log group', () => {
+    template.resourceCountIs('AWS::Logs::MetricFilter', 1);
+    const [filter] = Object.values(template.findResources('AWS::Logs::MetricFilter'));
+    expect(filter?.Properties.FilterPattern).toBe('{ $.level = "ERROR" }');
+    expect(filter?.Properties.LogGroupName.Ref).toMatch(/^WorkerLogs/);
+    expect(filter?.Properties.MetricTransformations).toEqual([
+      { MetricNamespace: 'Pokedrop/dev', MetricName: 'WorkerErrorLogs', MetricValue: '1' },
+    ]);
+    expect(alarmNamed('worker-error-logs')).toMatchObject({
+      Namespace: 'Pokedrop/dev',
+      MetricName: 'WorkerErrorLogs',
+      Statistic: 'Sum',
+      Period: 60,
+      Threshold: 1,
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+    });
+  });
+
+  test('crash alarm adds the worker Lambda errors and throttles', () => {
+    const a = alarmNamed('worker-crashes');
+    expect(a).toMatchObject({ Threshold: 1, ComparisonOperator: 'GreaterThanOrEqualToThreshold' });
+    const byId = Object.fromEntries(a.Metrics.map((m: { Id: string }) => [m.Id, m]));
+    const expression = a.Metrics.find((m: { Expression?: string }) => m.Expression).Expression;
+    expect(expression).toBe('FILL(errors, 0) + FILL(throttles, 0)');
+    for (const [id, name] of [
+      ['errors', 'Errors'],
+      ['throttles', 'Throttles'],
+    ]) {
+      expect(byId[id as string]?.MetricStat).toMatchObject({
+        Metric: {
+          Namespace: 'AWS/Lambda',
+          MetricName: name,
+          Dimensions: [
+            { Name: 'FunctionName', Value: { Ref: expect.stringMatching(/^WorkerFunction/) } },
+          ],
+        },
+        Stat: 'Sum',
+        Period: 60,
+      });
+    }
+  });
+
+  test('exposes the outputs the runbook uses', () => {
+    for (const output of [
+      'ReservationQueueArn',
+      'ReservationDlqArn',
+      'WorkerFunctionName',
+      'WorkerLogGroupName',
+      'AlarmTopicArn',
+    ]) {
+      template.hasOutput(output, { Value: Match.anyValue() });
     }
   });
 });
