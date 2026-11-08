@@ -50,8 +50,8 @@ hotswap: build
 # Dev-only worker failure injection (docs/runbook.md): records fail after their outcome is stored.
 # MODE=once fails only the delivery that stored the outcome (the retry then succeeds); MODE=always
 # fails every delivery, so the message reaches the dead letter queue. These are full deploys, not
-# hotswaps: a hotswap leaves CloudFormation's template unchanged, so `fail-off` would find nothing to
-# change. Any plain `make deploy` also turns the flag off. CDK refuses the flag outside dev.
+# hotswaps (see `hotswap` above), so `fail-off` always has a change to apply. Any plain
+# `make deploy` also turns the flag off. CDK refuses the flag outside dev.
 MODE ?= once
 
 fail-on: build
