@@ -26,12 +26,31 @@ export const WORKER_BATCH_SIZE = 10;
  */
 export const WORKER_MAX_CONCURRENCY = 5;
 
+/**
+ * Dev-only failure injection (FAIL_AFTER_COMMIT): the worker fails a record after its outcome is
+ * stored and before reporting it done. `once` fails only the delivery that stored the outcome;
+ * `always` fails every delivery, so the message reaches the dead letter queue.
+ */
+export type FailAfterCommit = 'once' | 'always';
+
+/** The only stage allowed to enable failure injection. */
+export const FAILURE_INJECTION_STAGE = 'dev';
+
+/** Parses the `failAfterCommit` context value: off (or unset), once or always. */
+export function parseFailAfterCommit(value: unknown): FailAfterCommit | undefined {
+  if (value === undefined || value === 'off') return undefined;
+  if (value === 'once' || value === 'always') return value;
+  throw new Error(`Invalid failAfterCommit "${String(value)}": use off, once or always`);
+}
+
 export interface WorkerProps {
   readonly inventoryTable: Table;
   readonly reservationsTable: Table;
   /** Queue the worker consumes. Its dead letter queue is handled by SQS, not the worker. */
   readonly reservationQueue: IQueue;
   readonly removalPolicy: RemovalPolicy;
+  /** Failure injection; leave unset outside dev (PokedropStack refuses it). */
+  readonly failAfterCommit?: FailAfterCommit;
 }
 
 /** Directory holding the cross-compiled worker `bootstrap` (built by `make build-lambda`). */
@@ -59,6 +78,8 @@ export class Worker extends Construct {
       environment: {
         INVENTORY_TABLE: props.inventoryTable.tableName,
         RESERVATIONS_TABLE: props.reservationsTable.tableName,
+        // Only present while failure injection is on, so the normal template never has it.
+        ...(props.failAfterCommit ? { FAIL_AFTER_COMMIT: props.failAfterCommit } : {}),
       },
     });
 

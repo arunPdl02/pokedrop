@@ -5,13 +5,21 @@ import { Construct } from 'constructs';
 import { Api } from './api';
 import { Auth } from './auth';
 import { Monitoring } from './monitoring';
-import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT, Worker } from './worker';
+import {
+  FAILURE_INJECTION_STAGE,
+  FailAfterCommit,
+  MAX_RECEIVE_COUNT,
+  WORKER_TIMEOUT,
+  Worker,
+} from './worker';
 
 export interface PokedropStackProps extends StackProps {
   /** Deployment stage, e.g. `dev` or `test`. Everything except `prod` is destroyable. */
   readonly stage: string;
   /** Receives the alarm emails (kept out of the repo; bin/app.ts reads ALARM_EMAIL). */
   readonly alarmEmail: string;
+  /** Dev-only worker failure injection (`make fail-on`). Any other stage refuses to synthesize. */
+  readonly failAfterCommit?: FailAfterCommit;
 }
 
 /** Key and attribute names mirror backend/internal/storage/schema.go. */
@@ -27,6 +35,12 @@ export class PokedropStack extends Stack {
 
   constructor(scope: Construct, id: string, props: PokedropStackProps) {
     super(scope, id, props);
+
+    if (props.failAfterCommit && props.stage !== FAILURE_INJECTION_STAGE) {
+      throw new Error(
+        `failAfterCommit is only allowed in the ${FAILURE_INJECTION_STAGE} stage, not "${props.stage}"`,
+      );
+    }
 
     Tags.of(this).add('project', 'pokedrop');
 
@@ -78,6 +92,7 @@ export class PokedropStack extends Stack {
       reservationsTable: this.reservationsTable,
       reservationQueue: this.reservationQueue,
       removalPolicy,
+      failAfterCommit: props.failAfterCommit,
     });
 
     this.monitoring = new Monitoring(this, 'Monitoring', {

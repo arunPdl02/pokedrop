@@ -18,6 +18,7 @@ import (
 // for every call, so tests can control how much of the deadline each record uses.
 type fakeProcessor struct {
 	errs  map[string]error
+	dups  map[string]bool
 	calls []reservations.QueueMessage
 	clock *time.Time
 	cost  time.Duration
@@ -33,7 +34,7 @@ func (f *fakeProcessor) Process(ctx context.Context, msg reservations.QueueMessa
 	}
 	return reservations.Recorded{Reservation: reservations.Reservation{
 		RequestID: msg.RequestID, TrainerID: msg.TrainerID, CardID: msg.CardID, Status: reservations.StatusConfirmed,
-	}}, nil
+	}, Duplicate: f.dups[msg.RequestID]}, nil
 }
 
 type harness struct {
@@ -45,7 +46,7 @@ type harness struct {
 
 func newHarness() *harness {
 	clock := time.Now()
-	proc := &fakeProcessor{errs: map[string]error{}, clock: &clock}
+	proc := &fakeProcessor{errs: map[string]error{}, dups: map[string]bool{}, clock: &clock}
 	logs := &strings.Builder{}
 	h := &handler{
 		log:  slog.New(slog.NewJSONHandler(logs, nil)),
@@ -297,6 +298,56 @@ func TestHandleLogsEachRecordReturnedAtTheDeadline(t *testing.T) {
 		line := checkRecordLine(t, lines, id, "WARN", "RETRY")
 		if line["reason"] != "deadline" || line["requestId"] == "" {
 			t.Errorf("deadline line = %v", line)
+		}
+	}
+}
+
+func TestFailAfterCommit(t *testing.T) {
+	tests := []struct {
+		mode failMode
+		want []string // failed message IDs: m1 is a new commit, m2 a duplicate
+	}{
+		{failOff, []string{}},
+		{failOnce, []string{"m1"}},
+		{failAlways, []string{"m1", "m2"}},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			hs := newHarness()
+			hs.h.failAfterCommit = tt.mode
+			hs.proc.dups["r2"] = true
+			ev := events.SQSEvent{Records: []events.SQSMessage{record(t, "m1", "r1"), record(t, "m2", "r2")}}
+
+			resp, err := hs.h.handle(hs.ctxWithin(t, 10*time.Second), ev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := failedIDs(resp); !equal(got, tt.want) {
+				t.Fatalf("failures = %v, want %v", got, tt.want)
+			}
+			if len(hs.proc.calls) != 2 {
+				t.Fatalf("calls = %d, want the outcome stored before failing", len(hs.proc.calls))
+			}
+			lines := recordLines(t, hs.logs.String())
+			for _, id := range tt.want {
+				line := checkRecordLine(t, lines, id, "WARN", "CONFIRMED")
+				if line["injectedFailure"] != string(tt.mode) {
+					t.Errorf("injected failure line = %v", line)
+				}
+			}
+		})
+	}
+}
+
+func TestParseFailMode(t *testing.T) {
+	for in, want := range map[string]failMode{"": failOff, "off": failOff, "once": failOnce, "always": failAlways} {
+		if got, err := parseFailMode(in); err != nil || got != want {
+			t.Errorf("parseFailMode(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"true", "ONCE", "1"} {
+		if _, err := parseFailMode(in); err == nil {
+			t.Errorf("parseFailMode(%q) accepted an unknown value", in)
 		}
 	}
 }

@@ -1,5 +1,6 @@
 import { App } from 'aws-cdk-lib';
 import { PokedropStack } from '../lib/pokedrop-stack';
+import { parseFailAfterCommit } from '../lib/worker';
 
 const app = new App();
 
@@ -18,5 +19,7 @@ if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) {
 new PokedropStack(app, `pokedrop-${stage}`, {
   stage,
   alarmEmail,
+  // `make fail-on` / `make fail-off`; the stack refuses it outside dev.
+  failAfterCommit: parseFailAfterCommit(app.node.tryGetContext('failAfterCommit')),
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-west-2' },
 });

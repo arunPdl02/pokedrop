@@ -2,14 +2,31 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { PokedropStack } from '../lib/pokedrop-stack';
 import { serviceLogGroup } from '../lib/log-group';
-import { MAX_RECEIVE_COUNT, WORKER_TIMEOUT } from '../lib/worker';
+import {
+  FailAfterCommit,
+  MAX_RECEIVE_COUNT,
+  WORKER_TIMEOUT,
+  parseFailAfterCommit,
+} from '../lib/worker';
 import { BACKLOG_AGE_THRESHOLD } from '../lib/monitoring';
 
-function synth(stage: string): Template {
+function synth(stage: string, failAfterCommit?: FailAfterCommit): Template {
   const app = new App();
   return Template.fromStack(
-    new PokedropStack(app, `pokedrop-${stage}`, { stage, alarmEmail: 'alarms@example.com' }),
+    new PokedropStack(app, `pokedrop-${stage}`, {
+      stage,
+      alarmEmail: 'alarms@example.com',
+      failAfterCommit,
+    }),
   );
+}
+
+function workerEnv(template: Template): Record<string, unknown> {
+  const fns = Object.entries(template.findResources('AWS::Lambda::Function')).filter(([id]) =>
+    id.startsWith('WorkerFunction'),
+  );
+  expect(fns).toHaveLength(1);
+  return (fns[0] as [string, any])[1].Properties.Environment.Variables;
 }
 
 interface Grant {
@@ -569,6 +586,37 @@ describe('PokedropStack monitoring', () => {
       'AlarmTopicArn',
     ]) {
       template.hasOutput(output, { Value: Match.anyValue() });
+    }
+  });
+});
+
+describe('PokedropStack failure injection', () => {
+  test('is off by default in every stage', () => {
+    for (const stage of ['dev', 'test', 'prod']) {
+      expect(workerEnv(synth(stage))).not.toHaveProperty('FAIL_AFTER_COMMIT');
+    }
+  });
+
+  test('dev can enable either mode', () => {
+    expect(workerEnv(synth('dev', 'once')).FAIL_AFTER_COMMIT).toBe('once');
+    expect(workerEnv(synth('dev', 'always')).FAIL_AFTER_COMMIT).toBe('always');
+  });
+
+  test('prod and test cannot enable it', () => {
+    for (const stage of ['prod', 'test']) {
+      for (const mode of ['once', 'always'] as const) {
+        expect(() => synth(stage, mode)).toThrow(/only allowed in the dev stage/);
+      }
+    }
+  });
+
+  test('context value must be off, once or always', () => {
+    expect(parseFailAfterCommit(undefined)).toBeUndefined();
+    expect(parseFailAfterCommit('off')).toBeUndefined();
+    expect(parseFailAfterCommit('once')).toBe('once');
+    expect(parseFailAfterCommit('always')).toBe('always');
+    for (const bad of ['true', 'on', '', 'ONCE']) {
+      expect(() => parseFailAfterCommit(bad)).toThrow(/Invalid failAfterCommit/);
     }
   });
 });

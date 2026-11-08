@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build build-lambda test test-local deploy hotswap seed token
+.PHONY: build build-lambda test test-local deploy hotswap fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -41,10 +41,34 @@ test-local:
 deploy: build
 	$(CDK) deploy --all -c stage=$(STAGE)
 
-# Fast path for Lambda code/config changes. Nothing to hotswap until Lambdas exist (Phase 2);
-# CDK falls back to a full deployment for anything it cannot hotswap.
+# Fast path for Lambda code changes. --hotswap updates the Lambdas directly and ignores changes it
+# cannot hotswap (it does not fall back to a full deployment), and CloudFormation's template is
+# left as it was. Use `make deploy` for anything else.
 hotswap: build
 	$(CDK) deploy --all --hotswap -c stage=$(STAGE)
+
+# Dev-only worker failure injection (docs/runbook.md): records fail after their outcome is stored.
+# MODE=once fails only the delivery that stored the outcome (the retry then succeeds); MODE=always
+# fails every delivery, so the message reaches the dead letter queue. These are full deploys, not
+# hotswaps: a hotswap leaves CloudFormation's template unchanged, so `fail-off` would find nothing to
+# change. Any plain `make deploy` also turns the flag off. CDK refuses the flag outside dev.
+MODE ?= once
+
+fail-on: build
+	@test "$(STAGE)" = dev || { echo "fail-on is dev-only (STAGE=$(STAGE))" >&2; exit 1; }
+	@case "$(MODE)" in once | always) ;; *) echo "MODE must be once or always" >&2; exit 1 ;; esac
+	$(CDK) deploy --all -c stage=$(STAGE) -c failAfterCommit=$(MODE)
+
+fail-off: build
+	@test "$(STAGE)" = dev || { echo "fail-off is dev-only (STAGE=$(STAGE))" >&2; exit 1; }
+	$(CDK) deploy --all -c stage=$(STAGE) -c failAfterCommit=off
+
+# Print the deployed worker's failure injection mode (read-only).
+fail-status:
+	@aws lambda get-function-configuration --output text \
+		--function-name "$$(aws cloudformation describe-stacks --stack-name pokedrop-$(STAGE) --output text \
+			--query "Stacks[0].Outputs[?OutputKey=='WorkerFunctionName'].OutputValue | [0]")" \
+		--query "Environment.Variables.FAIL_AFTER_COMMIT || 'off'"
 
 # Reset the dev inventory to the three seed cards (idempotent; resets stock, leaves
 # reservations untouched). Needs a deployed stack and valid AWS credentials.

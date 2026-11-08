@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -35,16 +36,61 @@ type handler struct {
 	log  *slog.Logger
 	proc processor
 	now  func() time.Time
+	// failAfterCommit is the dev-only failure injection; failOff in every other stage.
+	failAfterCommit failMode
+}
+
+// failMode is the FAIL_AFTER_COMMIT failure injection, which CDK only lets the dev stage set. It
+// makes a record fail after its outcome is stored and before the handler reports it done, as if
+// the worker died at the worst moment, so SQS redelivers a message whose work already committed.
+type failMode string
+
+const (
+	failOff failMode = ""
+	// failOnce fails a record only when this delivery stored the outcome, so the redelivery finds
+	// the duplicate and succeeds.
+	failOnce failMode = "once"
+	// failAlways fails every delivery, so a committed request reaches the dead letter queue.
+	failAlways failMode = "always"
+)
+
+func parseFailMode(v string) (failMode, error) {
+	switch v {
+	case "", "off":
+		return failOff, nil
+	case string(failOnce), string(failAlways):
+		return failMode(v), nil
+	}
+	return failOff, fmt.Errorf("FAIL_AFTER_COMMIT must be once, always or off, got %q", v)
+}
+
+// injectFailure reports whether the failure flag fails this successfully processed record.
+func (h *handler) injectFailure(rec reservations.Recorded) bool {
+	switch h.failAfterCommit {
+	case failAlways:
+		return true
+	case failOnce:
+		return !rec.Duplicate
+	}
+	return false
 }
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	fail, err := parseFailMode(os.Getenv("FAIL_AFTER_COMMIT"))
+	if err != nil {
+		log.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	if fail != failOff {
+		log.Warn("failure injection enabled: records fail after their outcome is stored", "injectedFailure", string(fail))
+	}
 	proc, err := newProcessor(context.Background(), log)
 	if err != nil {
 		log.Error("startup failed", "err", err)
 		os.Exit(1)
 	}
-	h := &handler{log: log, proc: proc, now: time.Now}
+	h := &handler{log: log, proc: proc, now: time.Now, failAfterCommit: fail}
 	lambda.Start(h.handle)
 }
 
@@ -127,6 +173,9 @@ func (h *handler) processRecord(ctx context.Context, record events.SQSMessage) b
 	rec, err := h.proc.Process(ctx, msg)
 	durationMs := h.now().Sub(start).Milliseconds()
 	switch {
+	case err == nil && h.injectFailure(rec):
+		log.Warn("injected failure after commit, message will be retried", "outcome", rec.Reservation.Status,
+			"duplicate", rec.Duplicate, "injectedFailure", string(h.failAfterCommit), "durationMs", durationMs)
 	case err == nil:
 		log.Info("reservation processed", "outcome", rec.Reservation.Status, "duplicate", rec.Duplicate, "durationMs", durationMs)
 		return true
