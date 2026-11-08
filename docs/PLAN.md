@@ -183,18 +183,30 @@ request ids`, `fix: resend interrupted reservation submissions after a refresh`,
 
 - [x] SQS retries (`maxReceiveCount`), dead letter queue, visibility timeout ≥ 6× worker timeout (done in Phase 3)
 - [x] Partial batch responses (`ReportBatchItemFailures`) (done in Phase 3)
-- [ ] Structured logs: requestId, cardId, outcome, duration
-- [ ] CloudWatch alarms: queue backlog age, DLQ messages, worker errors → SNS email
-- [ ] Dev-only failure flag that throws **after the transaction commits, before returning success**
-- [ ] `docs/runbook.md`: inspect error → fix cause → replay messages → verify inventory and reservations
+- [x] Structured logs: requestId, cardId, outcome, duration (plus messageId and attempt, one line per record)
+- [x] CloudWatch alarms: queue backlog age, DLQ messages, worker errors → SNS email (plus worker crashes/throttles)
+- [x] Dev-only failure flag that throws **after the transaction commits, before returning success** (`make fail-on MODE=once|always`, `make fail-off`)
+- [x] `docs/runbook.md`: inspect error → fix cause → replay messages → verify inventory and reservations
 
 **Commits**
-- [ ] `feat: configure retries dead letter queue and monitoring`
-- [ ] `test: verify worker recovery and document message replay`
+- [x] `feat: configure retries dead letter queue and monitoring` (retries and the DLQ were committed in Phase 3; the rest is committed as `feat: log every worker record with outcome and attempt`, `feat: alarm on queue backlog dead letters and worker failures` and `feat: inject worker failures after commit in dev`)
+- [x] `test: verify worker recovery and document message replay`
+
+Also committed (one logical change each): `test: add poison message script for the dead letter
+queue`, `chore: drop duplicated hotswap note from fail-on comment`, `fix: build lambdas without vcs
+stamps to skip unchanged redeploys`, and `docs: record Phase 5 decisions and verification`.
 
 **Milestone**
-- [ ] A forced post-commit failure retries without creating a duplicate reservation
-- [ ] A poison message reaches the DLQ and triggers an alarm
+- [x] A forced post-commit failure retries without creating a duplicate reservation
+- [x] A poison message reaches the DLQ and triggers an alarm
+
+> Verified on `pokedrop-dev` (2026-11-08), with full evidence in docs/runbook.md under "Drill results".
+> `MODE=once`: attempt 1 committed and then failed; attempt 2, 60 s later, was `duplicate: true`. One
+> `CONFIRMED` row, `card-001` 9 → 8. Poison message: 5 `FAILED` receives 60 s apart, then the DLQ;
+> `worker-error-logs` and `dlq-messages` fired and both emails arrived. `MODE=always`: a committed
+> request reached the DLQ next to the poison message. The runbook sorted them, deleted the poison
+> message and replayed the request with `start-message-move-task`: `duplicate: true`, stock still 7
+> (one decrement over 6 deliveries), one row. Queue and DLQ empty, all alarms OK, flag off.
 
 ---
 
