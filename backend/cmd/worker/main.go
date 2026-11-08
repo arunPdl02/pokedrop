@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -59,6 +60,13 @@ func newProcessor(ctx context.Context, log *slog.Logger) (*reservations.Processo
 	return reservations.NewProcessor(storage.NewLedger(dynamodb.NewFromConfig(cfg), tables), log), nil
 }
 
+// Outcomes logged for records that did not reach a terminal reservation status. Terminal records
+// log the stored status (CONFIRMED or SOLD_OUT) instead.
+const (
+	outcomeRetry  = "RETRY"
+	outcomeFailed = "FAILED"
+)
+
 // handle processes the batch in order and reports every record that did not reach a terminal
 // outcome. It never returns an error, so one bad record cannot fail the batch.
 func (h *handler) handle(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
@@ -67,11 +75,13 @@ func (h *handler) handle(ctx context.Context, ev events.SQSEvent) (events.SQSEve
 
 	for i, record := range ev.Records {
 		if hasDeadline && deadline.Sub(h.now()) < deadlineMargin {
-			for _, rest := range ev.Records[i:] {
-				resp.BatchItemFailures = append(resp.BatchItemFailures, events.SQSBatchItemFailure{ItemIdentifier: rest.MessageId})
-			}
 			h.log.Warn("deadline near, returning unprocessed records to the queue",
 				"remainingMs", deadline.Sub(h.now()).Milliseconds(), "unprocessed", len(ev.Records)-i)
+			for _, rest := range ev.Records[i:] {
+				resp.BatchItemFailures = append(resp.BatchItemFailures, events.SQSBatchItemFailure{ItemIdentifier: rest.MessageId})
+				log, _, _ := h.recordLog(rest)
+				log.Warn("message will be retried", "outcome", outcomeRetry, "reason", "deadline", "durationMs", int64(0))
+			}
 			break
 		}
 
@@ -89,17 +99,30 @@ func (h *handler) handle(ctx context.Context, ev events.SQSEvent) (events.SQSEve
 	return resp, nil
 }
 
-// processRecord reports whether the record reached a terminal outcome and can be deleted.
+// recordLog decodes the record body and returns a logger carrying the fields every record's log
+// line has: messageId, requestId, cardId and attempt (the SQS receive count). requestId and cardId
+// are empty when the body cannot be decoded, which is reported as the error.
+func (h *handler) recordLog(record events.SQSMessage) (*slog.Logger, reservations.QueueMessage, error) {
+	var msg reservations.QueueMessage
+	err := json.Unmarshal([]byte(record.Body), &msg)
+	if err != nil {
+		msg = reservations.QueueMessage{}
+	}
+	attempt, _ := strconv.Atoi(record.Attributes["ApproximateReceiveCount"])
+	log := h.log.With("messageId", record.MessageId, "requestId", msg.RequestID, "cardId", msg.CardID, "attempt", attempt)
+	return log, msg, err
+}
+
+// processRecord reports whether the record reached a terminal outcome and can be deleted. It logs
+// exactly one line for the record, with its outcome and duration.
 func (h *handler) processRecord(ctx context.Context, record events.SQSMessage) bool {
 	start := h.now()
-	log := h.log.With("messageId", record.MessageId, "receiveCount", record.Attributes["ApproximateReceiveCount"])
-
-	var msg reservations.QueueMessage
-	if err := json.Unmarshal([]byte(record.Body), &msg); err != nil {
-		log.Error("message failed permanently", "reason", "body is not a reservation message", "err", err)
+	log, msg, err := h.recordLog(record)
+	if err != nil {
+		log.Error("message failed permanently", "outcome", outcomeFailed,
+			"reason", "body is not a reservation message", "err", err, "durationMs", h.now().Sub(start).Milliseconds())
 		return false
 	}
-	log = log.With("requestId", msg.RequestID, "cardId", msg.CardID)
 
 	rec, err := h.proc.Process(ctx, msg)
 	durationMs := h.now().Sub(start).Milliseconds()
@@ -108,9 +131,9 @@ func (h *handler) processRecord(ctx context.Context, record events.SQSMessage) b
 		log.Info("reservation processed", "outcome", rec.Reservation.Status, "duplicate", rec.Duplicate, "durationMs", durationMs)
 		return true
 	case errors.Is(err, reservations.ErrPermanent):
-		log.Error("message failed permanently", "err", err, "durationMs", durationMs)
+		log.Error("message failed permanently", "outcome", outcomeFailed, "err", err, "durationMs", durationMs)
 	default:
-		log.Warn("message will be retried", "err", err, "durationMs", durationMs)
+		log.Warn("message will be retried", "outcome", outcomeRetry, "err", err, "durationMs", durationMs)
 	}
 	return false
 }

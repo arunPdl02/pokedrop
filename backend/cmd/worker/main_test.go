@@ -208,3 +208,95 @@ func TestHandleWithoutDeadlineProcessesEverything(t *testing.T) {
 		t.Fatalf("calls = %d, failures = %v", len(hs.proc.calls), failedIDs(resp))
 	}
 }
+
+// recordLines parses the JSON log output and returns the lines that belong to a record (those with
+// a messageId), keyed by message ID. It fails the test if a record logged more than one line.
+func recordLines(t *testing.T, logs string) map[string]map[string]any {
+	t.Helper()
+	lines := map[string]map[string]any{}
+	for _, raw := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var line map[string]any
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatalf("log line is not JSON: %q", raw)
+		}
+		id, ok := line["messageId"].(string)
+		if !ok {
+			continue
+		}
+		if _, dup := lines[id]; dup {
+			t.Fatalf("record %s logged more than one line:\n%s", id, logs)
+		}
+		lines[id] = line
+	}
+	return lines
+}
+
+var recordFields = []string{"messageId", "requestId", "cardId", "attempt", "outcome", "durationMs"}
+
+func checkRecordLine(t *testing.T, lines map[string]map[string]any, messageID, level, outcome string) map[string]any {
+	t.Helper()
+	line, ok := lines[messageID]
+	if !ok {
+		t.Fatalf("no log line for record %s", messageID)
+	}
+	for _, f := range recordFields {
+		if _, ok := line[f]; !ok {
+			t.Errorf("record %s log line has no %q: %v", messageID, f, line)
+		}
+	}
+	if line["level"] != level || line["outcome"] != outcome {
+		t.Errorf("record %s logged level=%v outcome=%v, want %s %s", messageID, line["level"], line["outcome"], level, outcome)
+	}
+	return line
+}
+
+func TestHandleLogsOneLineWithEveryFieldPerRecord(t *testing.T) {
+	hs := newHarness()
+	hs.proc.cost = 7 * time.Millisecond
+	hs.proc.errs["r2"] = fmt.Errorf("%w: transaction conflict", reservations.ErrRetryable)
+	hs.proc.errs["r3"] = fmt.Errorf("%w: card missing", reservations.ErrPermanent)
+	retried := record(t, "m1", "r1")
+	retried.Attributes["ApproximateReceiveCount"] = "3"
+	ev := events.SQSEvent{Records: []events.SQSMessage{
+		retried, record(t, "m2", "r2"), record(t, "m3", "r3"),
+		{MessageId: "bad", Body: "not json", Attributes: map[string]string{"ApproximateReceiveCount": "2"}},
+	}}
+
+	if _, err := hs.h.handle(hs.ctxWithin(t, 10*time.Second), ev); err != nil {
+		t.Fatal(err)
+	}
+	lines := recordLines(t, hs.logs.String())
+
+	ok := checkRecordLine(t, lines, "m1", "INFO", "CONFIRMED")
+	if ok["requestId"] != "r1" || ok["cardId"] != "card-001" || ok["attempt"] != float64(3) ||
+		ok["durationMs"] != float64(7) || ok["duplicate"] != false {
+		t.Errorf("success line = %v", ok)
+	}
+	checkRecordLine(t, lines, "m2", "WARN", "RETRY")
+	checkRecordLine(t, lines, "m3", "ERROR", "FAILED")
+	bad := checkRecordLine(t, lines, "bad", "ERROR", "FAILED")
+	if bad["requestId"] != "" || bad["cardId"] != "" || bad["attempt"] != float64(2) {
+		t.Errorf("malformed line = %v", bad)
+	}
+}
+
+func TestHandleLogsEachRecordReturnedAtTheDeadline(t *testing.T) {
+	hs := newHarness()
+	hs.proc.cost = 2 * time.Second
+	ev := events.SQSEvent{Records: []events.SQSMessage{
+		record(t, "m1", "r1"), record(t, "m2", "r2"), record(t, "m3", "r3"),
+	}}
+
+	// 3 s left: m1 runs, then only 1 s is left, so m2 and m3 go back unprocessed.
+	if _, err := hs.h.handle(hs.ctxWithin(t, 3*time.Second), ev); err != nil {
+		t.Fatal(err)
+	}
+	lines := recordLines(t, hs.logs.String())
+	checkRecordLine(t, lines, "m1", "INFO", "CONFIRMED")
+	for _, id := range []string{"m2", "m3"} {
+		line := checkRecordLine(t, lines, id, "WARN", "RETRY")
+		if line["reason"] != "deadline" || line["requestId"] == "" {
+			t.Errorf("deadline line = %v", line)
+		}
+	}
+}
