@@ -15,8 +15,10 @@ build: build-lambda
 
 # Cross-compile the Lambdas for provided.al2023 on arm64. CDK packages backend/build/<name> as the
 # function code, so they must exist before `cdk synth` (and therefore before the infra tests).
-# -trimpath and -s -w keep the binaries reproducible so an unchanged build is not redeployed.
-LAMBDA_BUILD = GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -trimpath -ldflags="-s -w"
+# -trimpath, -buildvcs=false and -s -w keep the binaries reproducible so an unchanged build is not
+# redeployed: without -buildvcs=false, Go stamps the git commit into each binary, so every commit
+# would change both Lambdas' hashes.
+LAMBDA_BUILD = GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -trimpath -buildvcs=false -ldflags="-s -w"
 
 build-lambda:
 	cd backend && $(LAMBDA_BUILD) -o build/api/bootstrap ./cmd/api
