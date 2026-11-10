@@ -93,6 +93,8 @@ type Capacity struct {
 	AccountLimit int
 	// WorkerMaxConcurrency is the worker event source's maximum concurrency.
 	WorkerMaxConcurrency int
+	// WorkerBatchSize is the most records the worker receives per invocation.
+	WorkerBatchSize int
 	// SafeConcurrency is the most concurrent API requests that fit beside the worker.
 	SafeConcurrency int
 }
@@ -127,10 +129,16 @@ func ReadCapacity(ctx context.Context, l lambdaAPI, workerFunction, queueARN str
 	if sc := mappings.EventSourceMappings[0].ScalingConfig; sc != nil {
 		workerMax = int(aws.ToInt32(sc.MaximumConcurrency))
 	}
+	c := Capacity{
+		AccountLimit:         limit,
+		WorkerMaxConcurrency: workerMax,
+		WorkerBatchSize:      int(aws.ToInt32(mappings.EventSourceMappings[0].BatchSize)),
+	}
 
 	safe, err := SafeConcurrency(limit, workerMax)
 	if err != nil {
-		return Capacity{AccountLimit: limit, WorkerMaxConcurrency: workerMax}, err
+		return c, err
 	}
-	return Capacity{AccountLimit: limit, WorkerMaxConcurrency: workerMax, SafeConcurrency: safe}, nil
+	c.SafeConcurrency = safe
+	return c, nil
 }

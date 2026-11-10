@@ -5,4 +5,5 @@ cdk.out/
 build/
 dist/
 coverage/
+tests/load/results/
 .claude/settings.json

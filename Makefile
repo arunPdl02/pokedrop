@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build build-lambda test test-local test-integration test-integration-failure deploy hotswap destroy fail-on fail-off fail-status seed token
+.PHONY: build build-lambda test test-local test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -58,6 +58,37 @@ test-integration:
 
 test-integration-failure:
 	$(call run_integration,^TestFailureAfterCommit$$)
+
+# Load test the deployed pokedrop-test stack (docs/benchmark.md has the full procedure). One run:
+#   make seed STAGE=test STOCK=100
+#   make load STAGE=test RUN=full REQUESTS=200 CONCURRENCY=4
+#   make drain-verify STAGE=test RUN=full STOCK=100
+# `load` runs the preflight (which refuses a concurrency the account's Lambda limit cannot take),
+# then k6, which writes one line per request to tests/load/results/<RUN>/submits.jsonl. `drain-verify`
+# waits for the queue to drain, checks the invariants and prints the benchmark numbers. Test stage only.
+RUN ?=
+REQUESTS ?= 20
+CONCURRENCY ?= 2
+CARD_ID ?= card-001
+LOAD_RESULTS = $(CURDIR)/tests/load/results
+
+load:
+	@test "$(STAGE)" = test || { echo "load tests only run with STAGE=test (STAGE=$(STAGE))" >&2; exit 1; }
+	@test -n "$(RUN)" || { echo "set RUN=<name>, for example: make load STAGE=test RUN=small" >&2; exit 1; }
+	cd backend && go run ./cmd/drainverify preflight -stage $(STAGE) -run $(RUN) -requests $(REQUESTS) \
+		-concurrency $(CONCURRENCY) -card $(CARD_ID) -results $(LOAD_RESULTS)
+	@api="$$(aws cloudformation describe-stacks --stack-name pokedrop-$(STAGE) --output text \
+			--query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue | [0]")" && \
+		token="$$($(MAKE) --no-print-directory -s token STAGE=$(STAGE))" && \
+		API_URL="$$api" TOKEN="$$token" CARD_ID="$(CARD_ID)" REQUESTS="$(REQUESTS)" CONCURRENCY="$(CONCURRENCY)" \
+		k6 run -q --console-output "$(LOAD_RESULTS)/$(RUN)/submits.jsonl" tests/load/burst.js
+
+drain-verify:
+	@test "$(STAGE)" = test || { echo "load tests only run with STAGE=test (STAGE=$(STAGE))" >&2; exit 1; }
+	@test -n "$(RUN)" || { echo "set RUN=<name> of a finished make load" >&2; exit 1; }
+	@test -n "$(STOCK)" || { echo "set STOCK=<the stock the card was seeded with before the run>" >&2; exit 1; }
+	cd backend && go run ./cmd/drainverify verify -stage $(STAGE) -run $(RUN) -stock $(STOCK) \
+		-results $(LOAD_RESULTS) -repo $(CURDIR)
 
 # Full deploy through CDK (the only way resources are created or changed).
 # CDK prompts before applying IAM/security-group changes.

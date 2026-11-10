@@ -107,7 +107,7 @@ func accountWith(unreserved int32) *lambda.GetAccountSettingsOutput {
 }
 
 func mappingWithCap(max *int32) *lambda.ListEventSourceMappingsOutput {
-	m := lambdatypes.EventSourceMappingConfiguration{}
+	m := lambdatypes.EventSourceMappingConfiguration{BatchSize: aws.Int32(10)}
 	if max != nil {
 		m.ScalingConfig = &lambdatypes.ScalingConfig{MaximumConcurrency: max}
 	}
@@ -120,7 +120,7 @@ func TestReadCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Capacity{AccountLimit: 10, WorkerMaxConcurrency: 5, SafeConcurrency: 4}); got != want {
+	if want := (Capacity{AccountLimit: 10, WorkerMaxConcurrency: 5, WorkerBatchSize: 10, SafeConcurrency: 4}); got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	if aws.ToString(f.listIn.FunctionName) != "worker-fn" || aws.ToString(f.listIn.EventSourceArn) != "arn:queue" {
