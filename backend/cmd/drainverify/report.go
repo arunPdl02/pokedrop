@@ -148,7 +148,7 @@ func (r report) markdown() string {
 	w("| CONFIRMED / SOLD_OUT | %d / %d |", e.Confirmed, e.SoldOut)
 	w("| Final stock | %d |", r.FinalStock)
 	w("| Submit latency (n=%d) | p50 %s, p95 %s (min %s, max %s) |", r.Timing.Submit.N, fmtMs(r.Timing.Submit.P50Ms), fmtMs(r.Timing.Submit.P95Ms), fmtMs(r.Timing.Submit.MinMs), fmtMs(r.Timing.Submit.MaxMs))
-	w("| Time to final outcome (n=%d) | p50 %s, p95 %s (min %s, max %s); good to about ±1 s |", r.Timing.TimeToFinal.N, fmtSec(r.Timing.TimeToFinal.P50Ms), fmtSec(r.Timing.TimeToFinal.P95Ms), fmtSec(r.Timing.TimeToFinal.MinMs), fmtSec(r.Timing.TimeToFinal.MaxMs))
+	w("| Time to final outcome (n=%d) | p50 %s, p95 %s (min %s, max %s); updatedAt resolves 1 s, so values under 1 s cannot be resolved and negative ones are measurement noise |", r.Timing.TimeToFinal.N, fmtSec(r.Timing.TimeToFinal.P50Ms), fmtSec(r.Timing.TimeToFinal.P95Ms), fmtSec(r.Timing.TimeToFinal.MinMs), fmtSec(r.Timing.TimeToFinal.MaxMs))
 	w("| Submit throughput | %.1f requests/s accepted |", r.Timing.SubmitPerSec)
 	w("| End-to-end throughput | %.1f outcomes/s |", r.Timing.EndToEndPerSec)
 	w("| Queue drain time | %.0f s from the last response to the last stored outcome |", r.Timing.DrainSec)
