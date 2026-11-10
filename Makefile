@@ -78,10 +78,13 @@ fail-status:
 			--query "Stacks[0].Outputs[?OutputKey=='WorkerFunctionName'].OutputValue | [0]")" \
 		--query "Environment.Variables.FAIL_AFTER_COMMIT || 'off'"
 
-# Reset the dev inventory to the three seed cards (idempotent; resets stock, leaves
-# reservations untouched). Needs a deployed stack and valid AWS credentials.
+# Reset the inventory to the three seed cards (idempotent; resets stock, leaves reservations
+# untouched). STOCK=100 sets every card to 100 instead of the cards.json values (load tests).
+# Needs a deployed stack and valid AWS credentials.
+STOCK ?=
+
 seed:
-	cd backend && go run ./cmd/seed -stage $(STAGE)
+	cd backend && go run ./cmd/seed -stage $(STAGE) $(if $(STOCK),-stock $(STOCK))
 
 # Print an access token for the dev test user (created on first use) on stdout; messages go to
 # stderr, so TOKEN=$$(make -s token) works. Reads TEST_USER_EMAIL / TEST_USER_PASSWORD from the

@@ -63,6 +63,27 @@ func parseCards(data []byte) ([]seedCard, error) {
 	return cards, nil
 }
 
+// noStockOverride is the -stock default: keep the stock from cards.json.
+const noStockOverride = -1
+
+// withStock returns a copy of cards with every card's stock set to stock. noStockOverride returns
+// the cards unchanged. Load tests use it to size a drop (for example 100 cards for 200 requests)
+// without editing the fixture.
+func withStock(cards []seedCard, stock int) ([]seedCard, error) {
+	if stock == noStockOverride {
+		return cards, nil
+	}
+	if stock < 0 || stock > seedStockMax {
+		return nil, fmt.Errorf("stock %d out of range [0, %d]", stock, seedStockMax)
+	}
+	out := make([]seedCard, len(cards))
+	for i, c := range cards {
+		c.Stock = stock
+		out[i] = c
+	}
+	return out, nil
+}
+
 func inventoryItem(c seedCard) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{
 		storage.InventoryKeyCardID: &types.AttributeValueMemberS{Value: c.CardID},
@@ -74,9 +95,10 @@ func inventoryItem(c seedCard) map[string]types.AttributeValue {
 
 func main() {
 	stage := flag.String("stage", "dev", "stack stage to seed (stack name: pokedrop-<stage>)")
+	stock := flag.Int("stock", noStockOverride, "set every card's stock to this value instead of the cards.json values")
 	flag.Parse()
 
-	if err := run(context.Background(), *stage); err != nil {
+	if err := run(context.Background(), *stage, *stock); err != nil {
 		if strings.Contains(err.Error(), "ExpiredToken") {
 			fmt.Fprintln(os.Stderr, expiredTokenGuidance)
 		}
@@ -85,9 +107,12 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, stage string) error {
+func run(ctx context.Context, stage string, stock int) error {
 	cards, err := parseCards(cardsJSON)
 	if err != nil {
+		return err
+	}
+	if cards, err = withStock(cards, stock); err != nil {
 		return err
 	}
 

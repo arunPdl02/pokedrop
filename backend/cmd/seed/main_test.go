@@ -34,6 +34,66 @@ func TestParseCardsRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestWithStockOverridesEveryCardWithoutMutatingTheInput(t *testing.T) {
+	cards, err := parseCards(cardsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := append([]seedCard(nil), cards...)
+
+	got, err := withStock(cards, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(cards) {
+		t.Fatalf("got %d cards, want %d", len(got), len(cards))
+	}
+	for i, c := range got {
+		if c.Stock != 100 {
+			t.Errorf("%s: stock = %d, want 100", c.CardID, c.Stock)
+		}
+		if c.CardID != cards[i].CardID || c.Name != cards[i].Name || c.Rarity != cards[i].Rarity {
+			t.Errorf("%s: only stock may change, got %+v", c.CardID, c)
+		}
+		if cards[i] != original[i] {
+			t.Errorf("input card %d was modified: %+v", i, cards[i])
+		}
+	}
+}
+
+func TestWithStockBounds(t *testing.T) {
+	cards, err := parseCards(cardsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ok := range []int{0, 1, seedStockMax} {
+		if got, err := withStock(cards, ok); err != nil || got[0].Stock != ok {
+			t.Errorf("stock %d: got %+v, %v; want it accepted", ok, got, err)
+		}
+	}
+	for _, bad := range []int{-2, seedStockMax + 1, 100000} {
+		if _, err := withStock(cards, bad); err == nil {
+			t.Errorf("stock %d: expected an error", bad)
+		}
+	}
+}
+
+func TestWithStockDefaultKeepsTheFixture(t *testing.T) {
+	cards, err := parseCards(cardsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := withStock(cards, noStockOverride)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range cards {
+		if got[i] != cards[i] {
+			t.Errorf("card %d changed without an override: %+v", i, got[i])
+		}
+	}
+}
+
 func TestInventoryItemUsesStorageSchema(t *testing.T) {
 	item := inventoryItem(seedCard{CardID: "card-001", Name: "Ember Drake", Rarity: "rare", Stock: 10})
 	for _, attr := range []string{
