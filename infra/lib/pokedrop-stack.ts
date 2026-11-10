@@ -6,7 +6,7 @@ import { Api } from './api';
 import { Auth } from './auth';
 import { Monitoring } from './monitoring';
 import {
-  FAILURE_INJECTION_STAGE,
+  FAILURE_INJECTION_STAGES,
   FailAfterCommit,
   MAX_RECEIVE_COUNT,
   WORKER_TIMEOUT,
@@ -18,7 +18,7 @@ export interface PokedropStackProps extends StackProps {
   readonly stage: string;
   /** Receives the alarm emails (kept out of the repo; bin/app.ts reads ALARM_EMAIL). */
   readonly alarmEmail: string;
-  /** Dev-only worker failure injection (`make fail-on`). Any other stage refuses to synthesize. */
+  /** Worker failure injection (`make fail-on`), dev and test only. Any other stage refuses to synthesize. */
   readonly failAfterCommit?: FailAfterCommit;
 }
 
@@ -36,9 +36,9 @@ export class PokedropStack extends Stack {
   constructor(scope: Construct, id: string, props: PokedropStackProps) {
     super(scope, id, props);
 
-    if (props.failAfterCommit && props.stage !== FAILURE_INJECTION_STAGE) {
+    if (props.failAfterCommit && !FAILURE_INJECTION_STAGES.includes(props.stage)) {
       throw new Error(
-        `failAfterCommit is only allowed in the ${FAILURE_INJECTION_STAGE} stage, not "${props.stage}"`,
+        `failAfterCommit is only allowed in the ${FAILURE_INJECTION_STAGES.join(' and ')} stages, not "${props.stage}"`,
       );
     }
 

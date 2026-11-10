@@ -590,6 +590,48 @@ describe('PokedropStack monitoring', () => {
   });
 });
 
+describe('PokedropStack test stage', () => {
+  const template = synth('test');
+
+  test('owns its own auth, tables and queues, all destroyed with the stack', () => {
+    template.resourceCountIs('AWS::Cognito::UserPool', 1);
+    template.resourceCountIs('AWS::DynamoDB::Table', 2);
+    template.resourceCountIs('AWS::SQS::Queue', 2);
+    for (const type of ['AWS::Cognito::UserPool', 'AWS::DynamoDB::Table', 'AWS::SQS::Queue']) {
+      for (const resource of Object.values(template.findResources(type))) {
+        expect(resource.DeletionPolicy).toBe('Delete');
+      }
+    }
+  });
+
+  test('has the dev client that make token needs, and the API trusts it', () => {
+    template.resourceCountIs('AWS::Cognito::UserPoolClient', 2);
+    template.hasOutput('DevClientId', { Value: Match.anyValue() });
+    const authorizer = Object.values(template.findResources('AWS::ApiGatewayV2::Authorizer'))[0]!;
+    expect(authorizer.Properties.JwtConfiguration.Audience).toHaveLength(2);
+  });
+
+  test('names its hosted UI domain and alarms after the stage, so it cannot collide with dev', () => {
+    const domains = Object.values(template.findResources('AWS::Cognito::UserPoolDomain'));
+    expect(domains).toHaveLength(1);
+    expect(JSON.stringify(domains[0]!.Properties.Domain)).toContain('pokedrop-test-');
+    const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'));
+    expect(alarms.length).toBeGreaterThan(0);
+    for (const alarm of alarms) {
+      expect(alarm.Properties.AlarmName).toMatch(/^pokedrop-test-/);
+    }
+  });
+
+  test('is tagged project=pokedrop', () => {
+    const tables = Object.values(template.findResources('AWS::DynamoDB::Table'));
+    for (const table of tables) {
+      expect(table.Properties.Tags).toEqual(
+        expect.arrayContaining([{ Key: 'project', Value: 'pokedrop' }]),
+      );
+    }
+  });
+});
+
 describe('PokedropStack failure injection', () => {
   test('is off by default in every stage', () => {
     for (const stage of ['dev', 'test', 'prod']) {
@@ -597,15 +639,17 @@ describe('PokedropStack failure injection', () => {
     }
   });
 
-  test('dev can enable either mode', () => {
-    expect(workerEnv(synth('dev', 'once')).FAIL_AFTER_COMMIT).toBe('once');
-    expect(workerEnv(synth('dev', 'always')).FAIL_AFTER_COMMIT).toBe('always');
+  test('dev and test can enable either mode', () => {
+    for (const stage of ['dev', 'test']) {
+      expect(workerEnv(synth(stage, 'once')).FAIL_AFTER_COMMIT).toBe('once');
+      expect(workerEnv(synth(stage, 'always')).FAIL_AFTER_COMMIT).toBe('always');
+    }
   });
 
-  test('prod and test cannot enable it', () => {
-    for (const stage of ['prod', 'test']) {
+  test('prod still refuses it, and so does any stage that is not on the allow-list', () => {
+    for (const stage of ['prod', 'staging']) {
       for (const mode of ['once', 'always'] as const) {
-        expect(() => synth(stage, mode)).toThrow(/only allowed in the dev stage/);
+        expect(() => synth(stage, mode)).toThrow(/only allowed in the dev and test stages/);
       }
     }
   });

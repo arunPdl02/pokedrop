@@ -33,8 +33,12 @@ export const WORKER_MAX_CONCURRENCY = 5;
  */
 export type FailAfterCommit = 'once' | 'always';
 
-/** The only stage allowed to enable failure injection. */
-export const FAILURE_INJECTION_STAGE = 'dev';
+/**
+ * The only stages allowed to enable failure injection. It is an allow-list, so any other stage
+ * (`prod` and anything added later) refuses the flag by default. `test` is the isolated stack the
+ * Phase 6 integration tests run against.
+ */
+export const FAILURE_INJECTION_STAGES: readonly string[] = ['dev', 'test'];
 
 /** Parses the `failAfterCommit` context value: off (or unset), once or always. */
 export function parseFailAfterCommit(value: unknown): FailAfterCommit | undefined {

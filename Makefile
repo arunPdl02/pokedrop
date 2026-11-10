@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build build-lambda test test-local deploy hotswap fail-on fail-off fail-status seed token
+.PHONY: build build-lambda test test-local deploy hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -49,20 +49,26 @@ deploy: build
 hotswap: build
 	$(CDK) deploy --all --hotswap -c stage=$(STAGE)
 
-# Dev-only worker failure injection (docs/runbook.md): records fail after their outcome is stored.
+# Tear down the isolated test stack (Phase 6). Test only: it will not touch dev or prod. CDK asks
+# for confirmation, so run it from an interactive terminal.
+destroy:
+	@test "$(STAGE)" = test || { echo "destroy is test-only (STAGE=$(STAGE)); use the README teardown steps for other stages" >&2; exit 1; }
+	$(CDK) destroy -c stage=$(STAGE)
+
+# Dev and test worker failure injection (docs/runbook.md): records fail after their outcome is stored.
 # MODE=once fails only the delivery that stored the outcome (the retry then succeeds); MODE=always
 # fails every delivery, so the message reaches the dead letter queue. These are full deploys, not
 # hotswaps (see `hotswap` above), so `fail-off` always has a change to apply. Any plain
-# `make deploy` also turns the flag off. CDK refuses the flag outside dev.
+# `make deploy` also turns the flag off. CDK refuses the flag outside dev and test.
 MODE ?= once
 
 fail-on: build
-	@test "$(STAGE)" = dev || { echo "fail-on is dev-only (STAGE=$(STAGE))" >&2; exit 1; }
+	@case "$(STAGE)" in dev | test) ;; *) echo "fail-on is dev/test-only (STAGE=$(STAGE))" >&2; exit 1 ;; esac
 	@case "$(MODE)" in once | always) ;; *) echo "MODE must be once or always" >&2; exit 1 ;; esac
 	$(CDK) deploy --all -c stage=$(STAGE) -c failAfterCommit=$(MODE)
 
 fail-off: build
-	@test "$(STAGE)" = dev || { echo "fail-off is dev-only (STAGE=$(STAGE))" >&2; exit 1; }
+	@case "$(STAGE)" in dev | test) ;; *) echo "fail-off is dev/test-only (STAGE=$(STAGE))" >&2; exit 1 ;; esac
 	$(CDK) deploy --all -c stage=$(STAGE) -c failAfterCommit=off
 
 # Print the deployed worker's failure injection mode (read-only).

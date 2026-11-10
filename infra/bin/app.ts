@@ -19,7 +19,7 @@ if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) {
 new PokedropStack(app, `pokedrop-${stage}`, {
   stage,
   alarmEmail,
-  // `make fail-on` / `make fail-off`; the stack refuses it outside dev.
+  // `make fail-on` / `make fail-off`; the stack refuses it outside dev and test.
   failAfterCommit: parseFailAfterCommit(app.node.tryGetContext('failAfterCommit')),
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-west-2' },
 });
