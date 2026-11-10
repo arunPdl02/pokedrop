@@ -280,6 +280,72 @@ func TestProcessStopsRetryingWhenContextEnds(t *testing.T) {
 	}
 }
 
+// Giving up mid-backoff must keep both the reason we were retrying and the reason we stopped, and
+// must stay retryable so SQS redelivers the message.
+func TestProcessContextEndedKeepsBothCauses(t *testing.T) {
+	conflict := errors.New("transaction conflict")
+	l := newFakeLedger(map[string]int{"card-001": 1})
+	l.errs = []error{fmt.Errorf("%w: %w", ErrRetryable, conflict)}
+	p, _ := testProcessor(l)
+	p.sleep = func(context.Context, time.Duration) error { return context.DeadlineExceeded }
+
+	_, err := p.Process(context.Background(), msg(reqID, "card-001"))
+	for _, want := range []error{ErrRetryable, conflict, context.DeadlineExceeded} {
+		if !errors.Is(err, want) {
+			t.Errorf("err = %v, want it to wrap %v", err, want)
+		}
+	}
+	if errors.Is(err, ErrPermanent) {
+		t.Error("an interrupted retry must never become permanent")
+	}
+	if l.stock["card-001"] != 1 || len(l.outcomes) != 0 {
+		t.Fatalf("nothing may be written: stock = %d, outcomes = %d", l.stock["card-001"], len(l.outcomes))
+	}
+}
+
+func TestProcessSoldOutWriteGivesUpAfterMaxAttempts(t *testing.T) {
+	l := newFakeLedger(map[string]int{"card-003": 0})
+	for i := range maxAttempts {
+		l.soldErrs = append(l.soldErrs, fmt.Errorf("%w: throttled %d", ErrRetryable, i))
+	}
+	p, _ := testProcessor(l)
+
+	_, err := p.Process(context.Background(), msg(reqID, "card-003"))
+	if !errors.Is(err, ErrRetryable) || errors.Is(err, ErrOutOfStock) {
+		t.Fatalf("err = %v, want ErrRetryable and not ErrOutOfStock", err)
+	}
+	if l.soldOuts != maxAttempts || len(l.outcomes) != 0 {
+		t.Fatalf("sold-out writes = %d, outcomes = %d", l.soldOuts, len(l.outcomes))
+	}
+}
+
+func TestProcessDoesNotRetryAPermanentSoldOutWrite(t *testing.T) {
+	l := newFakeLedger(map[string]int{"card-003": 0})
+	l.soldErrs = []error{fmt.Errorf("%w: access denied", ErrPermanent)}
+	p, slept := testProcessor(l)
+
+	_, err := p.Process(context.Background(), msg(reqID, "card-003"))
+	if !errors.Is(err, ErrPermanent) || l.soldOuts != 1 || len(*slept) != 0 {
+		t.Fatalf("err = %v, sold-out writes = %d, sleeps = %d", err, l.soldOuts, len(*slept))
+	}
+}
+
+func TestSleepCtx(t *testing.T) {
+	if err := sleepCtx(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("a finished wait returned %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := sleepCtx(ctx, time.Minute); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a canceled wait returned %v, want context.Canceled", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("a canceled wait must return at once, not wait out the timer")
+	}
+}
+
 func TestProcessDoesNotRetryPermanentErrors(t *testing.T) {
 	l := newFakeLedger(map[string]int{})
 	l.errs = []error{fmt.Errorf("%w: card missing", ErrPermanent)}

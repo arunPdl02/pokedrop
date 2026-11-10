@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -361,6 +362,96 @@ func TestMissingIdentityIsUnauthorizedOnEveryRoute(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Every code the service can return maps to the status docs/api.md promises. An unknown code is a
+// server bug, so it must surface as a 500 and never as a 2xx or a client error.
+func TestStatusForMatchesTheAPIContract(t *testing.T) {
+	cases := map[reservations.Code]int{
+		reservations.CodeInvalidRequest:      http.StatusBadRequest,
+		reservations.CodeUnauthorized:        http.StatusUnauthorized,
+		reservations.CodeCardNotFound:        http.StatusNotFound,
+		reservations.CodeReservationNotFound: http.StatusNotFound,
+		reservations.CodeQueueUnavailable:    http.StatusServiceUnavailable,
+		reservations.CodeInternal:            http.StatusInternalServerError,
+		reservations.Code("SOMETHING_NEW"):   http.StatusInternalServerError,
+		reservations.Code(""):                http.StatusInternalServerError,
+	}
+	for code, want := range cases {
+		if got := statusFor(code); got != want {
+			t.Errorf("statusFor(%q) = %d, want %d", code, got, want)
+		}
+	}
+}
+
+func failEnv() (*handler, *strings.Builder) {
+	var logs strings.Builder
+	return &handler{log: slog.New(slog.NewJSONHandler(&logs, nil))}, &logs
+}
+
+func TestFailLogsServerSideCausesButNeverSendsThem(t *testing.T) {
+	h, logs := failEnv()
+	err := &reservations.Error{Code: reservations.CodeQueueUnavailable, Message: "try again", Cause: errors.New("sqs down: queue-arn")}
+
+	resp := h.fail(err)
+	if resp.StatusCode != http.StatusServiceUnavailable || errorCode(t, resp) != "QUEUE_UNAVAILABLE" {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+	if strings.Contains(resp.Body, "sqs down") || strings.Contains(resp.Body, "queue-arn") {
+		t.Errorf("the cause reached the client: %s", resp.Body)
+	}
+	if !strings.Contains(logs.String(), "sqs down: queue-arn") {
+		t.Errorf("a 5xx must log its cause, logs = %q", logs.String())
+	}
+}
+
+func TestFailLogsAnInternalErrorsCause(t *testing.T) {
+	h, logs := failEnv()
+	resp := h.fail(&reservations.Error{Code: reservations.CodeInternal, Message: "internal error", Cause: errors.New("scan failed: throttled")})
+	if resp.StatusCode != http.StatusInternalServerError || strings.Contains(resp.Body, "scan failed") {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+	if !strings.Contains(logs.String(), "scan failed: throttled") {
+		t.Errorf("a plain 500 must log its cause too, logs = %q", logs.String())
+	}
+}
+
+func TestFailDoesNotLogClientErrors(t *testing.T) {
+	h, logs := failEnv()
+	for _, code := range []reservations.Code{
+		reservations.CodeInvalidRequest, reservations.CodeUnauthorized,
+		reservations.CodeCardNotFound, reservations.CodeReservationNotFound,
+	} {
+		resp := h.fail(&reservations.Error{Code: code, Message: "nope"})
+		if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+			t.Errorf("%s: status = %d, want 4xx", code, resp.StatusCode)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Errorf("client errors must not be logged as failures: %q", logs.String())
+	}
+}
+
+func TestFailFindsAWrappedServiceError(t *testing.T) {
+	h, _ := failEnv()
+	wrapped := fmt.Errorf("handling request: %w", &reservations.Error{Code: reservations.CodeCardNotFound, Message: "no such card"})
+	if resp := h.fail(wrapped); resp.StatusCode != http.StatusNotFound || errorCode(t, resp) != "CARD_NOT_FOUND" {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestFailTurnsAnUnexpectedErrorIntoAGeneric500(t *testing.T) {
+	h, logs := failEnv()
+	resp := h.fail(errors.New("table pokedrop-test-InventoryTable-XYZ exploded"))
+	if resp.StatusCode != http.StatusInternalServerError || errorCode(t, resp) != "INTERNAL_ERROR" {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+	if strings.Contains(resp.Body, "InventoryTable") {
+		t.Errorf("internal detail leaked: %s", resp.Body)
+	}
+	if !strings.Contains(logs.String(), "InventoryTable") {
+		t.Errorf("the cause must be logged: %q", logs.String())
 	}
 }
 

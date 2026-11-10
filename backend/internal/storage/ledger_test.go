@@ -230,6 +230,52 @@ func TestReserveDuplicateWithUnreadableOutcomeIsPermanent(t *testing.T) {
 	}
 }
 
+// When the failed condition returned no item, the fallback consistent read can itself fail. A
+// transient failure must retry (the outcome exists, we just could not read it), a permanent one
+// must not.
+func TestReserveDuplicateFallbackReadErrorsAreClassified(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want error
+	}{
+		"throttled":     {&smithy.GenericAPIError{Code: "ThrottlingException"}, reservations.ErrRetryable},
+		"timeout":       {context.DeadlineExceeded, reservations.ErrRetryable},
+		"access denied": {&smithy.GenericAPIError{Code: "AccessDeniedException"}, reservations.ErrPermanent},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			db := &fakeLedgerDB{
+				txErr:  canceled(reason("None", nil), reason("ConditionalCheckFailed", nil)),
+				getErr: tc.err,
+			}
+			_, err := NewLedger(db, testTables).Reserve(context.Background(), attempt())
+			if !errors.Is(err, tc.want) || !errors.Is(err, tc.err) {
+				t.Fatalf("err = %v, want %v wrapping its cause", err, tc.want)
+			}
+			if len(db.getIn) != 1 {
+				t.Fatalf("made %d reads, want 1", len(db.getIn))
+			}
+		})
+	}
+}
+
+func TestRecordSoldOutDuplicateFallsBackToConsistentRead(t *testing.T) {
+	db := &fakeLedgerDB{
+		putErr: &types.ConditionalCheckFailedException{},
+		getOut: &dynamodb.GetItemOutput{Item: storedOutcome(reservations.StatusConfirmed)},
+	}
+	rec, err := NewLedger(db, testTables).RecordSoldOut(context.Background(), attempt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Duplicate || rec.Reservation.Status != reservations.StatusConfirmed {
+		t.Fatalf("got %+v, want the stored CONFIRMED as a duplicate", rec)
+	}
+	if len(db.getIn) != 1 || !aws.ToBool(db.getIn[0].ConsistentRead) {
+		t.Fatalf("want one consistent read, got %+v", db.getIn)
+	}
+}
+
 func TestReserveErrors(t *testing.T) {
 	stock := map[string]types.AttributeValue{InventoryKeyCardID: s("card-001"), InventoryStock: n("0")}
 	cases := []struct {

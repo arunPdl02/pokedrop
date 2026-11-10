@@ -2,6 +2,7 @@ package reservations
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -87,6 +88,89 @@ func TestParseSubmitRejects(t *testing.T) {
 				t.Fatal("message must not be empty")
 			}
 		})
+	}
+}
+
+func TestParseSubmitCardIDLimitCountsCharactersNotBytes(t *testing.T) {
+	// 64 three-byte runes is 192 bytes but 64 characters, which the API contract allows.
+	atLimit := strings.Repeat("カ", 64)
+	got, err := ParseSubmit([]byte(`{"requestId":"` + validID + `","cardId":"` + atLimit + `"}`))
+	if err != nil || got.CardID != atLimit {
+		t.Fatalf("64 characters: got %+v, %v; want accepted", got, err)
+	}
+	_, err = ParseSubmit([]byte(`{"requestId":"` + validID + `","cardId":"` + atLimit + `カ"}`))
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != CodeInvalidRequest {
+		t.Fatalf("65 characters: err = %v, want INVALID_REQUEST", err)
+	}
+}
+
+func TestParseSubmitRejectsMoreControlCharacters(t *testing.T) {
+	for name, cardID := range map[string]string{
+		"DEL":            `a\u007fb`,
+		"tab":            `a\tb`,
+		"newline":        `a\nb`,
+		"carriage":       `a\rb`,
+		"unit separator": `a\u001fb`,
+	} {
+		_, err := ParseSubmit([]byte(`{"requestId":"` + validID + `","cardId":"` + cardID + `"}`))
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Code != CodeInvalidRequest {
+			t.Errorf("%s: err = %v, want INVALID_REQUEST", name, err)
+		}
+	}
+}
+
+func TestParseSubmitAcceptsAnyUUIDVersion(t *testing.T) {
+	for name, id := range map[string]string{
+		"nil UUID":  "00000000-0000-0000-0000-000000000000",
+		"version 1": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+		"version 4": validID,
+		"version 7": "018f3c5e-7b1a-7c2d-9e4f-0123456789ab",
+	} {
+		got, err := ParseSubmit([]byte(`{"requestId":"` + id + `","cardId":"c"}`))
+		if err != nil || got.RequestID != id {
+			t.Errorf("%s: got %+v, %v; want %q accepted", name, got, err, id)
+		}
+	}
+}
+
+func TestParseSubmitNormalizesMixedCaseRequestID(t *testing.T) {
+	mixed := "3F2b8C1e-6D4a-4A57-9b0E-1c2D3e4F5a6B"
+	got, err := ParseSubmit([]byte(`{"requestId":"` + mixed + `","cardId":"c"}`))
+	if err != nil || got.RequestID != validID {
+		t.Fatalf("got %+v, %v; want requestId %q", got, err, validID)
+	}
+}
+
+// With a repeated key encoding/json keeps the last value. Pinning it shows that a client cannot
+// slip a second, different requestId past validation by repeating the field: what is validated is
+// what is queued.
+func TestParseSubmitDuplicateKeysValidateTheValueThatIsUsed(t *testing.T) {
+	got, err := ParseSubmit([]byte(`{"requestId":"not-a-uuid","requestId":"` + validID + `","cardId":"c"}`))
+	if err != nil || got.RequestID != validID {
+		t.Fatalf("last value valid: got %+v, %v", got, err)
+	}
+	if _, err := ParseSubmit([]byte(`{"requestId":"` + validID + `","requestId":"not-a-uuid","cardId":"c"}`)); err == nil {
+		t.Fatal("last value invalid: expected an error even though an earlier value was valid")
+	}
+}
+
+func TestErrorStringAndUnwrap(t *testing.T) {
+	cause := errors.New("sqs down")
+	err := &Error{Code: CodeQueueUnavailable, Message: "try again", Cause: cause}
+	if got, want := err.Error(), "QUEUE_UNAVAILABLE: try again"; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), cause.Error()) {
+		t.Error("the cause is for logs and must not appear in the message")
+	}
+	if !errors.Is(err, cause) {
+		t.Error("errors.Is must reach the cause")
+	}
+	var target *Error
+	if !errors.As(fmt.Errorf("wrapped: %w", err), &target) || target.Code != CodeQueueUnavailable {
+		t.Error("errors.As must find the *Error through a wrapper")
 	}
 }
 

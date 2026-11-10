@@ -169,6 +169,74 @@ func TestGetMissingAndInvalid(t *testing.T) {
 	}
 }
 
+func validReservationItem() map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		ReservationKeyTrainerID: s("t"), ReservationKeyRequestID: s("r"), ReservationCardID: s("c"),
+		ReservationStatus: s("CONFIRMED"), ReservationUpdatedAt: s("2026-11-07T01:02:03Z"),
+	}
+}
+
+// A stored outcome with any attribute missing, empty or the wrong type must be rejected rather
+// than shown to a trainer as a half-filled reservation.
+func TestReservationFromItemRejectsEveryBadAttribute(t *testing.T) {
+	if _, err := reservationFromItem(validReservationItem()); err != nil {
+		t.Fatalf("the baseline item must decode: %v", err)
+	}
+	for _, attr := range []string{
+		ReservationKeyTrainerID, ReservationKeyRequestID, ReservationCardID, ReservationStatus, ReservationUpdatedAt,
+	} {
+		missing := validReservationItem()
+		delete(missing, attr)
+		if _, err := reservationFromItem(missing); err == nil {
+			t.Errorf("%s missing: expected an error", attr)
+		}
+
+		empty := validReservationItem()
+		empty[attr] = s("")
+		if _, err := reservationFromItem(empty); err == nil {
+			t.Errorf("%s empty: expected an error", attr)
+		}
+
+		wrongType := validReservationItem()
+		wrongType[attr] = n("1")
+		if _, err := reservationFromItem(wrongType); err == nil {
+			t.Errorf("%s as a number: expected an error", attr)
+		}
+	}
+}
+
+func TestReservationFromItemNormalizesTimestampsToUTC(t *testing.T) {
+	item := validReservationItem()
+	item[ReservationUpdatedAt] = s("2026-11-07T01:02:03-07:00")
+	got, err := reservationFromItem(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 11, 7, 8, 2, 3, 0, time.UTC); !got.UpdatedAt.Equal(want) || got.UpdatedAt.Location() != time.UTC {
+		t.Fatalf("updatedAt = %v, want %v in UTC", got.UpdatedAt, want)
+	}
+}
+
+func TestCardFromItemRejectsEveryBadAttribute(t *testing.T) {
+	if _, err := cardFromItem(cardItem("c", "n", "r", "1")); err != nil {
+		t.Fatalf("the baseline item must decode: %v", err)
+	}
+	for _, attr := range []string{InventoryKeyCardID, InventoryName, InventoryRarity, InventoryStock} {
+		missing := cardItem("c", "n", "r", "1")
+		delete(missing, attr)
+		if _, err := cardFromItem(missing); err == nil {
+			t.Errorf("%s missing: expected an error", attr)
+		}
+	}
+	for _, attr := range []string{InventoryKeyCardID, InventoryName, InventoryRarity} {
+		empty := cardItem("c", "n", "r", "1")
+		empty[attr] = s("")
+		if _, err := cardFromItem(empty); err == nil {
+			t.Errorf("%s empty: expected an error", attr)
+		}
+	}
+}
+
 func TestGetRejectsMalformedRecord(t *testing.T) {
 	db := &fakeDynamo{getOut: &dynamodb.GetItemOutput{Item: map[string]types.AttributeValue{
 		ReservationKeyTrainerID: s("t"), ReservationKeyRequestID: s("r"), ReservationCardID: s("c"),

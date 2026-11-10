@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -13,13 +14,16 @@ import (
 )
 
 type fakeSQS struct {
-	in  []*sqs.SendMessageInput
-	out *sqs.SendMessageOutput
-	err error
+	in       []*sqs.SendMessageInput
+	deadline []time.Time // the context deadline seen by each send (zero if none)
+	out      *sqs.SendMessageOutput
+	err      error
 }
 
-func (f *fakeSQS) SendMessage(_ context.Context, in *sqs.SendMessageInput, _ ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+func (f *fakeSQS) SendMessage(ctx context.Context, in *sqs.SendMessageInput, _ ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
 	f.in = append(f.in, in)
+	d, _ := ctx.Deadline()
+	f.deadline = append(f.deadline, d)
 	return f.out, f.err
 }
 
@@ -53,6 +57,30 @@ func TestEnqueueFailsUnlessSQSAccepted(t *testing.T) {
 		if err := NewPublisher(f, "u").Enqueue(context.Background(), msg); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
+	}
+}
+
+// A stuck queue must fail the request promptly (a 503) rather than hang until the gateway gives up,
+// so every send carries a deadline of at most sendTimeout, even if the caller's context has none.
+func TestEnqueueBoundsTheSendWithATimeout(t *testing.T) {
+	f := &fakeSQS{out: &sqs.SendMessageOutput{MessageId: aws.String("m-1")}}
+	start := time.Now()
+	if err := NewPublisher(f, "u").Enqueue(context.Background(), msg); err != nil {
+		t.Fatal(err)
+	}
+	if f.deadline[0].IsZero() {
+		t.Fatal("the send had no deadline")
+	}
+	if remaining := f.deadline[0].Sub(start); remaining > sendTimeout+time.Second {
+		t.Fatalf("deadline is %v away, want at most %v", remaining, sendTimeout)
+	}
+}
+
+func TestEnqueueKeepsTheSendErrorForLogs(t *testing.T) {
+	cause := errors.New("throttled")
+	err := NewPublisher(&fakeSQS{err: cause}, "u").Enqueue(context.Background(), msg)
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v, want it to wrap the SQS error", err)
 	}
 }
 
