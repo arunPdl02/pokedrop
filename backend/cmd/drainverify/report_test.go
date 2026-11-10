@@ -84,6 +84,15 @@ func TestSkewFrom(t *testing.T) {
 	}
 }
 
+func TestDescribeSkew(t *testing.T) {
+	if got := describeSkew(-2024 * time.Millisecond); got != "2024 ms behind" {
+		t.Errorf("got %q", got)
+	}
+	if got := describeSkew(202 * time.Millisecond); got != "202 ms ahead of" {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestHasAllAccepted(t *testing.T) {
 	submits, rows := run(3, 3)
 	if !hasAllAccepted(submits, rows) {

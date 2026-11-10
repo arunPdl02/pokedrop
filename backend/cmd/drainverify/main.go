@@ -69,6 +69,14 @@ func main() {
 	}
 }
 
+// describeSkew words a skew (local minus API) as "N ms ahead of" or "N ms behind".
+func describeSkew(skew time.Duration) string {
+	if skew < 0 {
+		return fmt.Sprintf("%d ms behind", -skew.Milliseconds())
+	}
+	return fmt.Sprintf("%d ms ahead of", skew.Milliseconds())
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: drainverify preflight|verify -run NAME [flags]   (see make load and make drain-verify)")
 	os.Exit(2)
@@ -167,9 +175,9 @@ func preflight(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "preflight: local clock is %d ms ahead of the API's (limit %d ms)\n", skew.Milliseconds(), maxSkew.Milliseconds())
+	fmt.Fprintf(os.Stderr, "preflight: local clock is %s the API's (limit %d ms)\n", describeSkew(skew), maxSkew.Milliseconds())
 	if skew > maxSkew || skew < -maxSkew {
-		return fmt.Errorf("the local clock is %d ms off the API's, which would skew time to final outcome: sync the clock first (on WSL, `sudo hwclock -s` or restarting WSL usually does it)", skew.Milliseconds())
+		return fmt.Errorf("the local clock is %s the API's, which would skew time to final outcome: sync the clock first (on WSL the clock comes from Windows: use Settings > Date & time > Sync now, or `w32tm /resync` as administrator)", describeSkew(skew))
 	}
 
 	if err := os.MkdirAll(c.dir(), 0o755); err != nil {
