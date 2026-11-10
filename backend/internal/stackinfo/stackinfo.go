@@ -72,19 +72,24 @@ func ExpiredTokenHint(err error) string {
 }
 
 // SafeConcurrency is the most concurrent API requests a load test may keep in flight without the
-// API Lambda and the worker competing for the account's Lambda concurrency. The worker can use up
-// to workerMax of the accountLimit, one slot stays spare, and the API gets the rest. A throttled
-// worker invocation puts its messages back on the queue with a higher receive count, so an
-// oversized test could push valid messages to the dead letter queue and fake a failure.
+// API Lambda and the worker competing for the account's Lambda concurrency. A throttled worker
+// invocation puts its messages back on the queue with a higher receive count, so an oversized test
+// could push valid messages to the dead letter queue and fake a failure.
+//
+// The arithmetic limit is accountLimit - workerMax - 1 (the worker at its cap, one slot spare, the
+// rest for the API). That was not enough: with a limit of 10 and a worker capped at 5, a run at 4
+// in flight still got 6 API throttles (HTTP 503) and 1 worker throttle (docs/benchmark.md). The
+// cause is not known, so the rule now takes half of that room. This is an empirical margin, not a
+// derived one; raise it only after a clean run at the higher value.
 func SafeConcurrency(accountLimit, workerMax int) (int, error) {
 	if workerMax <= 0 {
 		return 0, errors.New("the worker's event source has no maximum concurrency, so it could use the whole account limit")
 	}
-	safe := accountLimit - workerMax - 1
-	if safe < 1 {
+	room := accountLimit - workerMax - 1
+	if room < 1 {
 		return 0, fmt.Errorf("account Lambda concurrency limit %d leaves no room for the API next to a worker that can use %d", accountLimit, workerMax)
 	}
-	return safe, nil
+	return max(room/2, 1), nil
 }
 
 // Capacity is what limits how hard the stack can be driven.

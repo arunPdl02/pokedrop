@@ -69,9 +69,10 @@ func TestSafeConcurrency(t *testing.T) {
 		want             int
 		wantErr          bool
 	}{
-		{10, 5, 4, false},     // this account: 10 - 5 - 1
-		{1000, 5, 994, false}, // a normal account
-		{7, 5, 1, false},
+		{10, 5, 2, false},     // this account: half of 10 - 5 - 1 (4 still throttled)
+		{1000, 5, 497, false}, // a normal account: half of 994
+		{7, 5, 1, false},      // room for one: never rounds down to zero
+		{8, 5, 1, false},
 		{6, 5, 0, true},  // nothing left for the API
 		{5, 5, 0, true},  // the worker could take it all
 		{10, 0, 0, true}, // worker uncapped
@@ -120,7 +121,7 @@ func TestReadCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Capacity{AccountLimit: 10, WorkerMaxConcurrency: 5, WorkerBatchSize: 10, SafeConcurrency: 4}); got != want {
+	if want := (Capacity{AccountLimit: 10, WorkerMaxConcurrency: 5, WorkerBatchSize: 10, SafeConcurrency: 2}); got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	if aws.ToString(f.listIn.FunctionName) != "worker-fn" || aws.ToString(f.listIn.EventSourceArn) != "arn:queue" {
