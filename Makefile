@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build build-lambda test test-local deploy hotswap destroy fail-on fail-off fail-status seed token
+.PHONY: build build-lambda test test-local test-integration test-integration-failure deploy hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -37,6 +37,27 @@ test-local:
 	docker run -d --rm --name $(DYNAMODB_LOCAL_NAME) -p 127.0.0.1:$(DYNAMODB_LOCAL_PORT):8000 $(DYNAMODB_LOCAL_IMAGE) -jar DynamoDBLocal.jar -inMemory >/dev/null
 	cd backend && DYNAMODB_LOCAL_ENDPOINT=http://localhost:$(DYNAMODB_LOCAL_PORT) go test -count=1 -tags dynamodblocal -run '^TestLocal' -v ./internal/storage/; \
 		status=$$?; docker stop $(DYNAMODB_LOCAL_NAME) >/dev/null; exit $$status
+
+# Acceptance tests against the deployed pokedrop-test stack (docs/PLAN.md, Phase 6). They reset card
+# stock, so they only run with STAGE=test. Tokens for two trainers come from `make token`: trainer
+# A is TEST_USER_EMAIL, trainer B is TRAINER_B_EMAIL (created on first use, same password).
+#   make test-integration STAGE=test          rows 1, 2 and 5 (failure injection must be off)
+#   make test-integration-failure STAGE=test  row 3 (needs make fail-on STAGE=test MODE=once)
+TRAINER_B_EMAIL ?= trainer-b@example.test
+
+define run_integration
+	@test "$(STAGE)" = test || { echo "integration tests reset stock and only run with STAGE=test (STAGE=$(STAGE))" >&2; exit 1; }
+	@a="$$($(MAKE) --no-print-directory -s token STAGE=$(STAGE))" && \
+		b="$$(TEST_USER_EMAIL=$(TRAINER_B_EMAIL) $(MAKE) --no-print-directory -s token STAGE=$(STAGE))" && \
+		cd backend && STAGE=$(STAGE) TOKEN_A="$$a" TOKEN_B="$$b" \
+		go test -count=1 -tags integration -timeout 20m -v -run '$(1)' ./integration/
+endef
+
+test-integration:
+	$(call run_integration,^(TestOversell|TestDuplicates|TestDuplicateOfSoldOutStaysSoldOut|TestCrossTrainerRead)$$)
+
+test-integration-failure:
+	$(call run_integration,^TestFailureAfterCommit$$)
 
 # Full deploy through CDK (the only way resources are created or changed).
 # CDK prompts before applying IAM/security-group changes.
