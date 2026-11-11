@@ -1,0 +1,91 @@
+name: Deploy
+
+# Deploys pokedrop-prod from main, after the same checks as every other push. AWS access is keyless:
+# the job asks GitHub for an OIDC token and trades it for a one-hour session on the role defined in
+# infra/lib/ci.ts, which only this repository's main branch can assume and which can do nothing but
+# assume the CDK bootstrap roles. No AWS keys are stored anywhere.
+#
+# Repository secrets (Settings > Secrets and variables > Actions):
+#   AWS_ACCOUNT_ID  keeps the account ID out of the public logs (GitHub masks secret values)
+#   ALARM_EMAIL     the address that receives the prod alarm emails
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and a deploy in progress is never cancelled.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # lets the job request the OIDC token; grants nothing else
+    steps:
+      # Masking only works for secrets that exist, so stop before anything prints an account ID.
+      - name: Require the repository secrets
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ALARM_EMAIL: ${{ secrets.ALARM_EMAIL }}
+        run: |
+          if [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$ALARM_EMAIL" ]; then
+            echo "Set the AWS_ACCOUNT_ID and ALARM_EMAIL repository secrets" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            infra/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: make install
+
+      # The Lambdas and the frontend are packaged as CDK assets at synth, so build them first.
+      - name: Build
+        run: make build
+
+      - name: Assume the deploy role (OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pokedrop-github-deploy
+          aws-region: us-west-2
+          role-session-name: pokedrop-deploy-${{ github.run_id }}
+
+      - name: cdk diff
+        working-directory: infra
+        env:
+          ALARM_EMAIL: ${{ secrets.ALARM_EMAIL }}
+        run: npx cdk diff pokedrop-prod -c stage=prod
+
+      # `broadening` is the CDK default, spelled out: with no terminal, CDK stops and fails when a
+      # change adds IAM or security group permissions instead of approving it by itself. Such a
+      # change is deployed by hand first (make deploy STAGE=prod), reviewed from `cdk diff`.
+      - name: cdk deploy
+        working-directory: infra
+        env:
+          ALARM_EMAIL: ${{ secrets.ALARM_EMAIL }}
+        run: npx cdk deploy pokedrop-prod -c stage=prod --require-approval broadening
