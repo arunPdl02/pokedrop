@@ -7,3 +7,4 @@ dist/
 coverage/
 tests/load/results/
 .claude/settings.json
+frontend/public/config.json

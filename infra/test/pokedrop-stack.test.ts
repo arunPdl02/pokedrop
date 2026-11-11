@@ -475,6 +475,30 @@ describe('PokedropStack monitoring', () => {
     );
   });
 
+  test('prod keeps the alarm address out of every logical ID, so public CI logs do not print it', () => {
+    const prodTemplate = synth('prod').toJSON();
+    const ids = Object.keys(prodTemplate.Resources);
+    expect(ids).toContain(ids.find((id) => id.startsWith('MonitoringAlarmEmail')));
+    // The address itself is only ever a property value (which cdk diff and deploy do not print).
+    expect(ids.filter((id) => /alarms.?example.?com/i.test(id))).toEqual([]);
+    expect(JSON.stringify(Object.keys(prodTemplate.Outputs))).not.toMatch(/alarms.?example/i);
+    const subscriptions = Object.values<any>(prodTemplate.Resources).filter(
+      (r) => r.Type === 'AWS::SNS::Subscription',
+    );
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0].Properties).toMatchObject({
+      Protocol: 'email',
+      Endpoint: 'alarms@example.com',
+    });
+  });
+
+  test('dev and test keep the address-derived subscription ID, so they are not replaced', () => {
+    for (const stage of ['dev', 'test']) {
+      const ids = Object.keys(synth(stage).toJSON().Resources);
+      expect(ids.filter((id) => /alarmsexamplecom/i.test(id))).toHaveLength(1);
+    }
+  });
+
   test('has exactly the four alarms, all notifying on alarm and recovery', () => {
     expect(
       alarms()
@@ -628,6 +652,162 @@ describe('PokedropStack test stage', () => {
       expect(table.Properties.Tags).toEqual(
         expect.arrayContaining([{ Key: 'project', Value: 'pokedrop' }]),
       );
+    }
+  });
+});
+
+describe('PokedropStack frontend hosting', () => {
+  const prod = synth('prod');
+  /** The CloudFront URL as it appears in the template: `https://` + the distribution's domain. */
+  const cloudfrontOrigin = {
+    'Fn::Join': [
+      '',
+      [
+        'https://',
+        { 'Fn::GetAtt': [Match.stringLikeRegexp('^FrontendDistribution'), 'DomainName'] },
+      ],
+    ],
+  };
+
+  test('prod has one private, encrypted bucket that is deleted with the stack', () => {
+    prod.resourceCountIs('AWS::S3::Bucket', 1);
+    prod.hasResourceProperties('AWS::S3::Bucket', {
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+        ],
+      },
+      WebsiteConfiguration: Match.absent(),
+    });
+    for (const bucket of Object.values(prod.findResources('AWS::S3::Bucket'))) {
+      expect(bucket.DeletionPolicy).toBe('Delete');
+    }
+    // Emptying the bucket on delete is what lets the stack delete it; it is the only custom
+    // resource of that kind.
+    prod.resourceCountIs('Custom::S3AutoDeleteObjects', 1);
+  });
+
+  test('the bucket policy lets only this distribution read objects, over TLS', () => {
+    const policies = Object.values(prod.findResources('AWS::S3::BucketPolicy'));
+    expect(policies).toHaveLength(1);
+    const statements = policies[0]!.Properties.PolicyDocument.Statement as any[];
+
+    const allows = statements.filter((s) => s.Effect === 'Allow');
+    // Nobody is allowed by wildcard, and the only service principal is CloudFront.
+    for (const allow of allows) {
+      expect(JSON.stringify(allow.Principal)).not.toBe('"*"');
+      expect(allow.Principal.AWS).not.toBe('*');
+    }
+    const cloudfront = allows.filter((s) => s.Principal.Service === 'cloudfront.amazonaws.com');
+    expect(cloudfront).toHaveLength(1);
+    expect(cloudfront[0].Action).toBe('s3:GetObject');
+    expect(JSON.stringify(cloudfront[0].Condition)).toContain('AWS:SourceArn');
+    expect(JSON.stringify(cloudfront[0].Condition)).toContain('FrontendDistribution');
+    // The other allow is the auto-delete provider's role, scoped to this bucket.
+    expect(allows).toHaveLength(2);
+
+    expect(statements).toContainEqual(
+      expect.objectContaining({
+        Effect: 'Deny',
+        Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+      }),
+    );
+  });
+
+  test('CloudFront reads the bucket with origin access control, not a legacy identity', () => {
+    prod.hasResourceProperties('AWS::CloudFront::OriginAccessControl', {
+      OriginAccessControlConfig: {
+        OriginAccessControlOriginType: 's3',
+        SigningBehavior: 'always',
+        SigningProtocol: 'sigv4',
+      },
+    });
+    prod.resourceCountIs('AWS::CloudFront::CloudFrontOriginAccessIdentity', 0);
+    const distribution = Object.values(prod.findResources('AWS::CloudFront::Distribution'))[0]!;
+    const origins = distribution.Properties.DistributionConfig.Origins as any[];
+    expect(origins).toHaveLength(1);
+    expect(origins[0].OriginAccessControlId).toBeDefined();
+    expect(origins[0].S3OriginConfig).toEqual({ OriginAccessIdentity: '' });
+  });
+
+  test('the distribution serves index.html over HTTPS only, with security headers', () => {
+    prod.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    prod.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        DefaultRootObject: 'index.html',
+        DefaultCacheBehavior: {
+          ViewerProtocolPolicy: 'redirect-to-https',
+          ResponseHeadersPolicyId: Match.anyValue(),
+        },
+      },
+    });
+  });
+
+  test('prod signs in and allows CORS from the CloudFront URL only, with no localhost', () => {
+    prod.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      CallbackURLs: [cloudfrontOrigin],
+      LogoutURLs: [cloudfrontOrigin],
+    });
+    prod.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: { AllowOrigins: [cloudfrontOrigin] },
+    });
+    expect(JSON.stringify(prod.toJSON())).not.toContain('localhost');
+  });
+
+  test('the site is deployed with a config.json made from the stack, after the built files', () => {
+    const deployments = Object.values(prod.findResources('Custom::CDKBucketDeployment'));
+    expect(deployments).toHaveLength(1);
+    const props = deployments[0]!.Properties;
+    expect(props.DestinationBucketName.Ref).toMatch(/^FrontendBucket/);
+    expect(props.DistributionPaths).toEqual(['/*']);
+
+    // Two sources: the built site, then config.json, which wins over any file of that name in it.
+    expect(props.SourceObjectKeys).toHaveLength(2);
+    const [files, config] = props.SourceMarkers as Record<string, unknown>[];
+    expect(files).toEqual({});
+    const values = JSON.stringify(Object.values(config!));
+    expect(values).toContain('ApiHttpApi'); // apiUrl
+    expect(values).toContain('AuthUserPoolFrontendClient'); // clientId, the PKCE client
+    expect(values).not.toContain('DevClient');
+    expect(values).toContain('AuthUserPoolHostedUi'); // hostedUiDomain
+    expect(values).toContain('.amazoncognito.com'); // a host name, without a scheme
+    expect(values).not.toContain('https://');
+    expect(Object.keys(config!)).toHaveLength(3);
+  });
+
+  test('exposes the site outputs', () => {
+    prod.hasOutput('FrontendUrl', { Value: cloudfrontOrigin });
+    prod.hasOutput('FrontendBucketName', { Value: Match.anyValue() });
+    prod.hasOutput('DistributionId', { Value: Match.anyValue() });
+  });
+
+  test('dev and test have no site, and still sign in and allow CORS from localhost only', () => {
+    for (const stage of ['dev', 'test']) {
+      const template = synth(stage);
+      for (const type of [
+        'AWS::S3::Bucket',
+        'AWS::CloudFront::Distribution',
+        'Custom::CDKBucketDeployment',
+        'Custom::S3AutoDeleteObjects',
+      ]) {
+        template.resourceCountIs(type, 0);
+      }
+      for (const output of ['FrontendUrl', 'FrontendBucketName', 'DistributionId']) {
+        expect(template.toJSON().Outputs).not.toHaveProperty(output);
+      }
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        CallbackURLs: ['http://localhost:5173'],
+        LogoutURLs: ['http://localhost:5173'],
+      });
+      template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+        CorsConfiguration: { AllowOrigins: ['http://localhost:5173'] },
+      });
     }
   });
 });

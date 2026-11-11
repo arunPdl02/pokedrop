@@ -7,7 +7,7 @@ import { Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Architecture, Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
-import { Auth, FRONTEND_ORIGIN, REQUIRED_SCOPE } from './auth';
+import { Auth, REQUIRED_SCOPE } from './auth';
 import { serviceLogGroup } from './log-group';
 
 export interface ApiProps {
@@ -17,6 +17,8 @@ export interface ApiProps {
   /** Queue the API publishes accepted reservation requests to. */
   readonly reservationQueue: IQueue;
   readonly removalPolicy: RemovalPolicy;
+  /** Origins allowed by CORS: the ones the frontend is served from. */
+  readonly frontendOrigins: string[];
 }
 
 /**
@@ -70,7 +72,7 @@ export class Api extends Construct {
       ),
       defaultAuthorizationScopes: [REQUIRED_SCOPE],
       corsPreflight: {
-        allowOrigins: [FRONTEND_ORIGIN],
+        allowOrigins: props.frontendOrigins,
         allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.OPTIONS],
         allowHeaders: ['Authorization', 'Content-Type'],
         maxAge: Duration.hours(1),

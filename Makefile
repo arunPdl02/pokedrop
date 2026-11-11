@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: install build build-frontend build-lambda lint test test-local test-local-run test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
+.PHONY: frontend-config install build build-frontend build-lambda lint test test-local test-local-run test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -38,7 +38,8 @@ lint:
 	@test -z "$$(gofmt -l backend)" || { echo "gofmt needed:"; gofmt -l backend; exit 1; }
 	cd backend && go vet ./...
 
-test: lint build-lambda
+# The infra tests synthesize the prod stack, which packages frontend/dist, so the SPA is built first.
+test: lint build-lambda build-frontend
 	cd backend && go test ./...
 	cd infra && npm test --silent
 	cd frontend && npm test --silent
@@ -162,3 +163,19 @@ seed:
 # Use TEST_USER_EMAIL=other@example.com make token for a second trainer.
 token:
 	@cd backend && go run ./cmd/token -stage $(STAGE)
+
+# Write frontend/public/config.json (gitignored) from the stack's outputs, so `npm run dev` talks to
+# that stage. A deployed site gets its own config.json from CDK instead, so prod is refused here
+# (it does not register http://localhost:5173 as a sign-in URL anyway). Read-only AWS calls.
+frontend-config:
+	@test "$(STAGE)" != prod || { echo "prod's config.json is written by the deploy, not by this target" >&2; exit 1; }
+	@out() { aws cloudformation describe-stacks --stack-name pokedrop-$(STAGE) --output text \
+			--query "Stacks[0].Outputs[?OutputKey=='$$1'].OutputValue | [0]"; }; \
+		api="$$(out ApiUrl)"; client="$$(out UserPoolClientId)"; domain="$$(out HostedUiDomain)"; \
+		for v in "$$api" "$$client" "$$domain"; do \
+			case "$$v" in ""|None) echo "stack output missing: is pokedrop-$(STAGE) deployed?" >&2; exit 1 ;; esac; \
+		done; \
+		mkdir -p frontend/public && \
+		printf '{\n  "apiUrl": "%s",\n  "clientId": "%s",\n  "hostedUiDomain": "%s"\n}\n' "$$api" "$$client" "$$domain" \
+			> frontend/public/config.json && \
+		echo "wrote frontend/public/config.json for pokedrop-$(STAGE)"
