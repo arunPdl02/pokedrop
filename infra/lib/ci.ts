@@ -12,7 +12,17 @@ import { Construct } from 'constructs';
 /** The only repository whose workflows can assume the deploy role. */
 export const GITHUB_REPO = 'arunPdl02/pokedrop';
 
-/** The only branch. The token's `sub` claim is `repo:<repo>:ref:refs/heads/<branch>` for a push or a dispatch on it. */
+/**
+ * How this repository's OIDC tokens start their `sub` claim. GitHub gives repositories immutable
+ * subjects, made of the owner and repository IDs instead of their names, so a renamed, deleted and
+ * recreated or transferred repository cannot inherit the trust. The name-based form
+ * (`repo:arunPdl02/pokedrop`) is therefore NOT what these tokens carry, and a trust policy written
+ * for it is refused, which is how the first deploy run failed. Read the real value with
+ * `gh api repos/arunPdl02/pokedrop/actions/oidc/customization/sub` (`sub_claim_prefix`).
+ */
+export const GITHUB_SUBJECT_PREFIX = 'repo:arunPdl02@135916160/pokedrop@1442086654';
+
+/** The only branch. The token's `sub` is `<subject prefix>:ref:refs/heads/<branch>` for a push or a dispatch on it. */
 export const DEPLOY_BRANCH = 'main';
 
 export const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com';
@@ -29,8 +39,8 @@ export const DEPLOY_ROLE_NAME = 'pokedrop-github-deploy';
 export const BOOTSTRAP_ROLE_TYPES = ['deploy', 'file-publishing', 'lookup'] as const;
 
 export interface CiStackProps extends StackProps {
-  /** Defaults to this repository (GITHUB_REPO). Exposed for tests. */
-  readonly githubRepo?: string;
+  /** Defaults to this repository's subject prefix (GITHUB_SUBJECT_PREFIX). Exposed for tests. */
+  readonly subjectPrefix?: string;
   readonly branch?: string;
   /** CDK bootstrap qualifier. The default bootstrap, which this account uses, is `hnb659fds`. */
   readonly qualifier?: string;
@@ -57,7 +67,7 @@ export class CiStack extends Stack {
   constructor(scope: Construct, id: string, props: CiStackProps = {}) {
     super(scope, id, props);
 
-    const repo = props.githubRepo ?? GITHUB_REPO;
+    const subjectPrefix = props.subjectPrefix ?? GITHUB_SUBJECT_PREFIX;
     const branch = props.branch ?? DEPLOY_BRANCH;
     const qualifier = props.qualifier ?? DefaultStackSynthesizer.DEFAULT_QUALIFIER;
 
@@ -72,7 +82,7 @@ export class CiStack extends Stack {
 
     this.deployRole = new Role(this, 'DeployRole', {
       roleName: DEPLOY_ROLE_NAME,
-      description: `Assumed by GitHub Actions on ${repo}@${branch} to run cdk deploy; may only assume the CDK bootstrap roles.`,
+      description: `Assumed by GitHub Actions on ${GITHUB_REPO}@${branch} to run cdk deploy; may only assume the CDK bootstrap roles.`,
       maxSessionDuration: Duration.hours(1),
       // Exact matches only: this audience and this one branch of this one repository. A workflow
       // on a pull request, another branch, a tag, an environment or a fork has a different `sub`
@@ -80,7 +90,7 @@ export class CiStack extends Stack {
       assumedBy: new WebIdentityPrincipal(this.provider.oidcProviderArn, {
         StringEquals: {
           [`${GITHUB_OIDC_HOST}:aud`]: GITHUB_OIDC_AUDIENCE,
-          [`${GITHUB_OIDC_HOST}:sub`]: `repo:${repo}:ref:refs/heads/${branch}`,
+          [`${GITHUB_OIDC_HOST}:sub`]: `${subjectPrefix}:ref:refs/heads/${branch}`,
         },
       }),
     });
