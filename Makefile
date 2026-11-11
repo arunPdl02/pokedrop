@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: install build build-frontend build-lambda test test-local test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
+.PHONY: install build build-frontend build-lambda lint test test-local test-local-run test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -33,9 +33,12 @@ build-lambda:
 	cd backend && $(LAMBDA_BUILD) -o build/api/bootstrap ./cmd/api
 	cd backend && $(LAMBDA_BUILD) -o build/worker/bootstrap ./cmd/worker
 
-test: build-lambda
+# Formatting and static checks, also run by CI as its own step.
+lint:
 	@test -z "$$(gofmt -l backend)" || { echo "gofmt needed:"; gofmt -l backend; exit 1; }
 	cd backend && go vet ./...
+
+test: lint build-lambda
 	cd backend && go test ./...
 	cd infra && npm test --silent
 	cd frontend && npm test --silent
@@ -44,8 +47,14 @@ test: build-lambda
 # throwaway in-memory container, runs the `dynamodblocal`-tagged tests, and always removes it.
 test-local:
 	docker run -d --rm --name $(DYNAMODB_LOCAL_NAME) -p 127.0.0.1:$(DYNAMODB_LOCAL_PORT):8000 $(DYNAMODB_LOCAL_IMAGE) -jar DynamoDBLocal.jar -inMemory >/dev/null
-	cd backend && DYNAMODB_LOCAL_ENDPOINT=http://localhost:$(DYNAMODB_LOCAL_PORT) go test -count=1 -tags dynamodblocal -run '^TestLocal' -v ./internal/storage/; \
-		status=$$?; docker stop $(DYNAMODB_LOCAL_NAME) >/dev/null; exit $$status
+	$(MAKE) --no-print-directory test-local-run; status=$$?; docker stop $(DYNAMODB_LOCAL_NAME) >/dev/null; exit $$status
+
+# The same tests against a DynamoDB Local that is already running at DYNAMODB_LOCAL_ENDPOINT. CI
+# uses this with a service container; `make test-local` starts its own container and calls it.
+DYNAMODB_LOCAL_ENDPOINT ?= http://localhost:$(DYNAMODB_LOCAL_PORT)
+
+test-local-run:
+	cd backend && DYNAMODB_LOCAL_ENDPOINT=$(DYNAMODB_LOCAL_ENDPOINT) go test -count=1 -tags dynamodblocal -run '^TestLocal' -v ./internal/storage/
 
 # Acceptance tests against the deployed pokedrop-test stack (docs/PLAN.md, Phase 6). They reset card
 # stock, so they only run with STAGE=test. Tokens for two trainers come from `make token`: trainer

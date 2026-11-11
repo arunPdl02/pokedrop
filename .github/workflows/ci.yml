@@ -1,0 +1,92 @@
+name: CI
+
+# Runs on every push and pull request. The deploy workflow reuses it (workflow_call) so a deploy
+# only starts from a commit that passed the same checks.
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# github.workflow is the caller's name in a reused workflow, so this run and the deploy workflow's
+# run of it never share a group. Runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            infra/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: make install
+
+      - name: gofmt and go vet
+        run: make lint
+
+      - name: Tests (Go, CDK assertions, frontend)
+        run: make test
+
+      - name: Build (Lambdas, backend, infra type-check, frontend type-check and bundle)
+        run: make build
+
+      # No AWS credentials here: synth needs none. The address only has to look like an email,
+      # and it never receives anything because nothing is deployed.
+      - name: CDK synth
+        working-directory: infra
+        env:
+          ALARM_EMAIL: ci@example.invalid
+        run: |
+          npx cdk synth -c stage=dev --quiet
+          npx cdk synth -c stage=prod --quiet
+
+  dynamodb-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Keep the tag in step with DYNAMODB_LOCAL_IMAGE in the Makefile.
+      dynamodb:
+        image: amazon/dynamodb-local:3.3.2
+        ports:
+          - 8000:8000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Wait for DynamoDB Local
+        run: |
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8000) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "DynamoDB Local did not start" >&2
+          exit 1
+
+      - name: Concurrency and duplicate tests against DynamoDB Local
+        run: make test-local-run
