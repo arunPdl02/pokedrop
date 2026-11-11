@@ -3,7 +3,8 @@ import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { Api } from './api';
-import { Auth } from './auth';
+import { Auth, LOCAL_FRONTEND_ORIGIN } from './auth';
+import { Frontend } from './frontend';
 import { Monitoring } from './monitoring';
 import {
   FAILURE_INJECTION_STAGES,
@@ -32,6 +33,8 @@ export class PokedropStack extends Stack {
   public readonly auth: Auth;
   public readonly api: Api;
   public readonly monitoring: Monitoring;
+  /** The public demo site. Only the `prod` stage has one; every other stage uses `npm run dev`. */
+  public readonly frontend?: Frontend;
 
   constructor(scope: Construct, id: string, props: PokedropStackProps) {
     super(scope, id, props);
@@ -59,7 +62,15 @@ export class PokedropStack extends Stack {
       removalPolicy,
     });
 
-    this.auth = new Auth(this, 'Auth', { stage: props.stage, removalPolicy });
+    // The one origin the frontend is served from: the CloudFront URL in prod (a public stage
+    // registers no localhost redirects), localhost for every other stage. Cognito's callback and
+    // logout URLs and the API's CORS rules both use it, so they cannot disagree.
+    if (props.stage === 'prod') {
+      this.frontend = new Frontend(this, 'Frontend');
+    }
+    const frontendOrigins = [this.frontend?.origin ?? LOCAL_FRONTEND_ORIGIN];
+
+    this.auth = new Auth(this, 'Auth', { stage: props.stage, removalPolicy, frontendOrigins });
 
     // Messages that fail MAX_RECEIVE_COUNT times land here, kept for the longest SQS allows so
     // they can be inspected and replayed (docs/runbook.md).
@@ -85,6 +96,7 @@ export class PokedropStack extends Stack {
       reservationsTable: this.reservationsTable,
       reservationQueue: this.reservationQueue,
       removalPolicy,
+      frontendOrigins,
     });
 
     this.worker = new Worker(this, 'Worker', {
@@ -104,6 +116,21 @@ export class PokedropStack extends Stack {
       workerLogGroup: this.worker.logGroup,
     });
 
+    const hostedUiDomain = this.auth.domain.baseUrl().replace(/^https:\/\//, '');
+
+    if (this.frontend) {
+      this.frontend.deploy({
+        apiUrl: this.api.httpApi.apiEndpoint,
+        clientId: this.auth.userPoolClient.userPoolClientId,
+        hostedUiDomain,
+      });
+      new CfnOutput(this, 'FrontendUrl', { value: this.frontend.origin });
+      new CfnOutput(this, 'FrontendBucketName', { value: this.frontend.bucket.bucketName });
+      new CfnOutput(this, 'DistributionId', {
+        value: this.frontend.distribution.distributionId,
+      });
+    }
+
     new CfnOutput(this, 'InventoryTableName', { value: this.inventoryTable.tableName });
     new CfnOutput(this, 'ReservationsTableName', { value: this.reservationsTable.tableName });
     new CfnOutput(this, 'ReservationQueueUrl', { value: this.reservationQueue.queueUrl });
@@ -119,8 +146,6 @@ export class PokedropStack extends Stack {
     if (this.auth.devClient) {
       new CfnOutput(this, 'DevClientId', { value: this.auth.devClient.userPoolClientId });
     }
-    new CfnOutput(this, 'HostedUiDomain', {
-      value: this.auth.domain.baseUrl().replace(/^https:\/\//, ''),
-    });
+    new CfnOutput(this, 'HostedUiDomain', { value: hostedUiDomain });
   }
 }

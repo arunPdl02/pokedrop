@@ -38,7 +38,8 @@ lint:
 	@test -z "$$(gofmt -l backend)" || { echo "gofmt needed:"; gofmt -l backend; exit 1; }
 	cd backend && go vet ./...
 
-test: lint build-lambda
+# The infra tests synthesize the prod stack, which packages frontend/dist, so the SPA is built first.
+test: lint build-lambda build-frontend
 	cd backend && go test ./...
 	cd infra && npm test --silent
 	cd frontend && npm test --silent

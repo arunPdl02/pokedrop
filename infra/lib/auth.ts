@@ -8,8 +8,11 @@ import {
 } from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 
-/** The only origin the frontend runs from until Phase 7 adds the CloudFront URL. */
-export const FRONTEND_ORIGIN = 'http://localhost:5173';
+/**
+ * Where `npm run dev` serves the frontend. Every stage except `prod` allows exactly this origin;
+ * `prod` allows exactly its CloudFront URL instead (see PokedropStack).
+ */
+export const LOCAL_FRONTEND_ORIGIN = 'http://localhost:5173';
 
 /**
  * Scope every API route requires. It is the one scope carried by access tokens from both the
@@ -21,6 +24,8 @@ export interface AuthProps {
   /** Deployment stage. The dev-only client is never created for `prod`. */
   readonly stage: string;
   readonly removalPolicy: RemovalPolicy;
+  /** Origins the frontend is served from; each is registered as the sign-in callback and logout URL. */
+  readonly frontendOrigins: string[];
 }
 
 /** Trainer sign-in: user pool, hosted UI domain, the PKCE frontend client and a dev-only client. */
@@ -55,8 +60,8 @@ export class Auth extends Construct {
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, OAuthScope.COGNITO_ADMIN],
-        callbackUrls: [FRONTEND_ORIGIN],
-        logoutUrls: [FRONTEND_ORIGIN],
+        callbackUrls: props.frontendOrigins,
+        logoutUrls: props.frontendOrigins,
       },
       preventUserExistenceErrors: true,
     });
