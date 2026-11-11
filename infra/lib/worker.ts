@@ -6,7 +6,7 @@ import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
-import { serviceLogGroup } from './log-group';
+import { lambdaRole, serviceLogGroup } from './log-group';
 
 /**
  * Worker Lambda timeout. The reservation queue's visibility timeout is derived from it (6×, the
@@ -78,6 +78,8 @@ export class Worker extends Construct {
       memorySize: 256,
       timeout: WORKER_TIMEOUT,
       logGroup: this.logGroup,
+      // Writes only to its own log group; no AWSLambdaBasicExecutionRole (see lambdaRole).
+      role: lambdaRole(this, 'Role', this.logGroup),
       // Names mirror backend/internal/storage/schema.go.
       environment: {
         INVENTORY_TABLE: props.inventoryTable.tableName,
