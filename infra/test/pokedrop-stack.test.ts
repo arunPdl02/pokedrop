@@ -475,6 +475,30 @@ describe('PokedropStack monitoring', () => {
     );
   });
 
+  test('prod keeps the alarm address out of every logical ID, so public CI logs do not print it', () => {
+    const prodTemplate = synth('prod').toJSON();
+    const ids = Object.keys(prodTemplate.Resources);
+    expect(ids).toContain(ids.find((id) => id.startsWith('MonitoringAlarmEmail')));
+    // The address itself is only ever a property value (which cdk diff and deploy do not print).
+    expect(ids.filter((id) => /alarms.?example.?com/i.test(id))).toEqual([]);
+    expect(JSON.stringify(Object.keys(prodTemplate.Outputs))).not.toMatch(/alarms.?example/i);
+    const subscriptions = Object.values<any>(prodTemplate.Resources).filter(
+      (r) => r.Type === 'AWS::SNS::Subscription',
+    );
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0].Properties).toMatchObject({
+      Protocol: 'email',
+      Endpoint: 'alarms@example.com',
+    });
+  });
+
+  test('dev and test keep the address-derived subscription ID, so they are not replaced', () => {
+    for (const stage of ['dev', 'test']) {
+      const ids = Object.keys(synth(stage).toJSON().Resources);
+      expect(ids.filter((id) => /alarmsexamplecom/i.test(id))).toHaveLength(1);
+    }
+  });
+
   test('has exactly the four alarms, all notifying on alarm and recovery', () => {
     expect(
       alarms()

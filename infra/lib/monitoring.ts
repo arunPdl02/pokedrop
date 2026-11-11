@@ -10,7 +10,7 @@ import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { IFunction } from 'aws-cdk-lib/aws-lambda';
 import { FilterPattern, ILogGroup, MetricFilter } from 'aws-cdk-lib/aws-logs';
-import { Topic } from 'aws-cdk-lib/aws-sns';
+import { Subscription, SubscriptionProtocol, Topic } from 'aws-cdk-lib/aws-sns';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
@@ -56,7 +56,20 @@ export class Monitoring extends Construct {
       displayName: `PokeDrop ${props.stage} alarms`,
       enforceSSL: true,
     });
-    this.topic.addSubscription(new EmailSubscription(props.alarmEmail));
+    if (props.stage === 'prod') {
+      // EmailSubscription names its construct after the address, so the address ends up in the
+      // logical ID, which `cdk diff` and `cdk deploy` print. CI logs of a public repo are public,
+      // and GitHub masks only the exact secret, not that altered form. A fixed ID keeps the
+      // address out of the output. It is prod-only because renaming dev's or test's subscription
+      // would replace it and need a new email confirmation.
+      new Subscription(this, 'AlarmEmail', {
+        topic: this.topic,
+        protocol: SubscriptionProtocol.EMAIL,
+        endpoint: props.alarmEmail,
+      });
+    } else {
+      this.topic.addSubscription(new EmailSubscription(props.alarmEmail));
+    }
     // Only this stack's alarms may publish (the topic policy replaces the SNS default policy).
     this.topic.addToResourcePolicy(
       new PolicyStatement({
