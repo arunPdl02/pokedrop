@@ -204,6 +204,22 @@ The stack also outputs `InventoryTableName`, `ReservationsTableName`, `Reservati
 `WorkerLogGroupName` and `AlarmTopicArn`; those are for the backend, tooling and
 [docs/runbook.md](runbook.md), not the frontend.
 
+### Prod stack outputs
+
+Values of the deployed **`pokedrop-prod`** stack (the public demo), recorded 2026-11-11. They are
+identifiers, not secrets, and the site serves the first three of them in `/config.json`. They change
+if the stack is destroyed and recreated.
+
+| Output | Value |
+|---|---|
+| `FrontendUrl` | `https://d1ewiq3l30zml1.cloudfront.net` |
+| `ApiUrl` | `https://kz1fhk0k0c.execute-api.us-west-2.amazonaws.com` |
+| `UserPoolId` | `us-west-2_m33VnTN0h` |
+| `UserPoolClientId` (PKCE, frontend) | `mpj6gm3i5qmmmv86knennnolr` |
+| `HostedUiDomain` | `pokedrop-prod-06cf96add323.auth.us-west-2.amazoncognito.com` |
+
+Prod has no dev client, so `make token` does not work against it: sign in through the site.
+
 ### Frontend sign-in settings
 
 For the PKCE client (`UserPoolClientId`), against `https://<HostedUiDomain>`:
