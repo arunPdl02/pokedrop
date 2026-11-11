@@ -3,15 +3,24 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: build build-lambda test test-local test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
+.PHONY: install build build-frontend build-lambda test test-local test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
 DYNAMODB_LOCAL_NAME = pokedrop-dynamodb-local
 
-build: build-lambda
+# Install the exact locked npm dependencies (what CI uses). Go modules are fetched on demand.
+install:
+	cd infra && npm ci
+	cd frontend && npm ci
+
+build: build-lambda build-frontend
 	cd backend && go build ./...
 	cd infra && npm run --silent build
+
+# Type-check and bundle the SPA into frontend/dist.
+build-frontend:
+	cd frontend && npm run --silent build
 
 # Cross-compile the Lambdas for provided.al2023 on arm64. CDK packages backend/build/<name> as the
 # function code, so they must exist before `cdk synth` (and therefore before the infra tests).
