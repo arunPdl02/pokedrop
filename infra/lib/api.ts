@@ -8,7 +8,7 @@ import { Architecture, Code, Function as LambdaFunction, Runtime } from 'aws-cdk
 import { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { Auth, REQUIRED_SCOPE } from './auth';
-import { serviceLogGroup } from './log-group';
+import { lambdaRole, serviceLogGroup } from './log-group';
 
 export interface ApiProps {
   readonly auth: Auth;
@@ -35,6 +35,8 @@ export class Api extends Construct {
   constructor(scope: Construct, id: string, props: ApiProps) {
     super(scope, id);
 
+    const logGroup = serviceLogGroup(this, 'Logs', props.removalPolicy);
+
     this.function = new LambdaFunction(this, 'Function', {
       runtime: Runtime.PROVIDED_AL2023,
       architecture: Architecture.ARM_64,
@@ -42,7 +44,9 @@ export class Api extends Construct {
       code: Code.fromAsset(API_CODE_DIR),
       memorySize: 256,
       timeout: Duration.seconds(10),
-      logGroup: serviceLogGroup(this, 'Logs', props.removalPolicy),
+      logGroup,
+      // Writes only to its own log group; no AWSLambdaBasicExecutionRole (see lambdaRole).
+      role: lambdaRole(this, 'Role', logGroup),
       // Names mirror backend/internal/storage/schema.go and backend/internal/queue.
       environment: {
         INVENTORY_TABLE: props.inventoryTable.tableName,

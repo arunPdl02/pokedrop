@@ -35,14 +35,21 @@ export interface FrontendConfig {
  * distribution depends only on the bucket, so there is no cycle. Construct it first, pass
  * `origin` to Auth and Api, then call `deploy` with their values.
  */
+export interface FrontendProps {
+  /** The built SPA. Defaults to frontend/dist; tests pass a fixture directory. */
+  readonly distDir?: string;
+}
+
 export class Frontend extends Construct {
   public readonly bucket: Bucket;
   public readonly distribution: Distribution;
   /** `https://<id>.cloudfront.net`: the sign-in redirect and CORS origin. No trailing slash. */
   public readonly origin: string;
+  private readonly distDir: string;
 
-  constructor(scope: Construct, id: string) {
+  constructor(scope: Construct, id: string, props: FrontendProps = {}) {
     super(scope, id);
+    this.distDir = props.distDir ?? FRONTEND_DIST_DIR;
 
     // The contents are rebuilt from the repo on every deploy, so nothing here is worth keeping:
     // the bucket is emptied and deleted with the stack (unlike the tables and the user pool).
@@ -74,13 +81,18 @@ export class Frontend extends Construct {
 
   /**
    * Uploads the built site and a config.json made from this stack's own values, then invalidates
-   * the cache so the new files are served at once. The config source comes last, so it replaces
-   * any config.json that `make frontend-config` left in frontend/public.
+   * the cache so the new files are served at once.
+   *
+   * The built files are uploaded without any config.json of their own: `make frontend-config`
+   * writes a git-ignored dev one into frontend/public, which `vite build` copies into dist on a
+   * developer's machine but not in CI. Left in, it changed the asset hash, so a manual deploy and a
+   * CI deploy each re-uploaded the site for no reason, and the stack's own config.json was the only
+   * thing keeping dev values off the live site. Now the generated file is the only config shipped.
    */
   public deploy(config: FrontendConfig): void {
     new BucketDeployment(this, 'Deployment', {
       sources: [
-        Source.asset(FRONTEND_DIST_DIR),
+        Source.asset(this.distDir, { exclude: ['config.json'] }),
         Source.jsonData('config.json', {
           apiUrl: config.apiUrl,
           clientId: config.clientId,
