@@ -8,6 +8,13 @@ import { CiStack, DEPLOY_ROLE_NAME } from '../lib/ci';
 
 const ACCOUNT = '111111111111';
 const REGION = 'us-west-2';
+/**
+ * What GitHub puts in the `sub` of a token from a push or dispatch on main of this repository. It
+ * uses the owner and repository IDs, not their names (`gh api
+ * repos/arunPdl02/pokedrop/actions/oidc/customization/sub`). Written out in full on purpose, so a
+ * change to the constant in lib/ci.ts cannot silently change the test too.
+ */
+const MAIN_SUBJECT = 'repo:arunPdl02@135916160/pokedrop@1442086654:ref:refs/heads/main';
 
 function synth(props: Partial<ConstructorParameters<typeof CiStack>[2]> = {}): Template {
   const app = new App();
@@ -51,7 +58,7 @@ describe('CiStack', () => {
       Condition: {
         StringEquals: {
           'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-          'token.actions.githubusercontent.com:sub': 'repo:arunPdl02/pokedrop:ref:refs/heads/main',
+          'token.actions.githubusercontent.com:sub': MAIN_SUBJECT,
         },
       },
     });
@@ -59,6 +66,12 @@ describe('CiStack', () => {
     expect(JSON.stringify(trust)).not.toMatch(/StringLike|ForAnyValue|ForAllValues|\*/);
     expect(Object.keys(statement.Principal)).toEqual(['Federated']);
     expect(JSON.stringify(statement.Principal.Federated)).toContain('GithubProvider');
+  });
+
+  test('trusts the immutable ID-based subject, not the name-based one that tokens do not carry', () => {
+    const trust = JSON.stringify(deployRole(template).Properties.AssumeRolePolicyDocument);
+    expect(trust).toContain('@135916160/pokedrop@1442086654');
+    expect(trust).not.toContain('repo:arunPdl02/pokedrop');
   });
 
   test('the role may only assume the deploy, file-publishing and lookup bootstrap roles', () => {
@@ -97,7 +110,7 @@ describe('CiStack', () => {
     const [statement] = deployRole(existing).Properties.AssumeRolePolicyDocument.Statement;
     expect(statement.Principal.Federated).toBe(arn);
     expect(statement.Condition.StringEquals['token.actions.githubusercontent.com:sub']).toBe(
-      'repo:arunPdl02/pokedrop:ref:refs/heads/main',
+      MAIN_SUBJECT,
     );
   });
 });
