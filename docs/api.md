@@ -8,7 +8,9 @@ request/response shapes; change it before changing the implementation.
 - Base URL: the `ApiUrl` stack output (see [Stack outputs](#stack-outputs)).
 - Requests and responses are JSON (`Content-Type: application/json`).
 - Timestamps are RFC 3339 UTC strings.
-- CORS: allowed origin `http://localhost:5173` (CloudFront URL added in Phase 7).
+- CORS: the dev and test stages allow only `http://localhost:5173`. The prod stage allows only its
+  CloudFront URL (the `FrontendUrl` output) and no localhost. The Cognito callback and logout URLs
+  follow the same rule.
 
 ## Auth rules
 
@@ -188,6 +190,15 @@ aws cloudformation describe-stacks --stack-name pokedrop-dev --profile pokedrop 
   --query "Stacks[0].Outputs" --output table
 ```
 
+The `prod` stage also outputs `FrontendUrl` (the CloudFront URL the demo is served from),
+`FrontendBucketName` and `DistributionId`; no other stage has a site.
+
+The frontend does not have these values built in. It fetches `/config.json` before it renders:
+`{ "apiUrl", "clientId", "hostedUiDomain" }`, where `clientId` is the PKCE client's. The prod deploy
+writes that file from the stack's own values (CDK `BucketDeployment`), and
+`make frontend-config STAGE=dev` writes the same file (git-ignored, `frontend/public/config.json`)
+from a dev or test stack's outputs for `npm run dev`.
+
 The stack also outputs `InventoryTableName`, `ReservationsTableName`, `ReservationQueueUrl`,
 `ReservationDlqUrl`, `ReservationQueueArn`, `ReservationDlqArn`, `WorkerFunctionName`,
 `WorkerLogGroupName` and `AlarmTopicArn`; those are for the backend, tooling and
@@ -204,7 +215,7 @@ For the PKCE client (`UserPoolClientId`), against `https://<HostedUiDomain>`:
 | Logout endpoint | `/logout` |
 | `response_type` | `code`, with PKCE `code_challenge_method=S256` (implicit flow is disabled) |
 | `scope` | `openid email aws.cognito.signin.user.admin` (the last one is required by the API) |
-| `redirect_uri` / `logout_uri` | exactly `http://localhost:5173` (no path) |
+| `redirect_uri` / `logout_uri` | exactly the origin the site is served from, with no path: `http://localhost:5173` on dev and test, the CloudFront URL on prod (the frontend uses `window.location.origin`) |
 | Token to send to the API | the **access token** (an ID token gets `403`) |
 
 > The browser authorization-code + PKCE exchange was verified in Phase 4, by signing in from the real
