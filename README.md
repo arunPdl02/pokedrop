@@ -88,7 +88,8 @@ ownership with: `scripts/ownership-fixture.sh add` inserts one `CONFIRMED` reser
 
 `make seed` is idempotent: it writes each card unconditionally, so re-running **resets stock** to the
 seed values (10 / 5 / 1). It never touches the reservations table, so reseeding after real
-reservations leaves stock out of step with them. Use it on dev stacks only.
+reservations leaves stock out of step with them. Use it on dev and test stacks only.
+`make seed STOCK=100` sets every card to that stock instead (used by the load tests, with `STAGE=test`).
 
 ## Teardown
 
@@ -101,7 +102,9 @@ cd infra && npx cdk destroy -c stage=dev --profile pokedrop
 CDK asks for confirmation; answer `y`. In a non-interactive shell (scripts, CI, coding agents) it
 refuses to run without a terminal, so add `--force` to skip the prompt.
 
-Use `-c stage=test` for the test stack. This does not remove the shared `CDKToolkit` bootstrap stack
+The isolated test stack that Phase 6's integration and load tests use (see
+[docs/benchmark.md](docs/benchmark.md)) is torn down with `make destroy STAGE=test`, which refuses any
+other stage. This does not remove the shared `CDKToolkit` bootstrap stack
 or its S3 bucket, and it does not affect the account's AWS Budget; those live outside this app.
 Redeploy with `make deploy` and reseed with `make seed`.
 

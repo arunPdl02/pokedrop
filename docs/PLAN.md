@@ -212,11 +212,11 @@ stamps to skip unchanged redeploys`, and `docs: record Phase 5 decisions and ver
 
 ## Phase 6 — Correctness and performance (est. 2–3 h)
 
-- [ ] Go unit tests for validation and error classification
-- [ ] Integration tests against an isolated `test` stack
-- [ ] k6 scripts for authenticated bursts (configurable card and request counts)
-- [ ] Drain-and-verify script that checks inventory and reservation counts
-- [ ] Acceptance tests (run small first: 10 cards / 20 requests):
+- [x] Go unit tests for validation and error classification
+- [x] Integration tests against an isolated `test` stack (`make test-integration`, `make test-integration-failure`)
+- [x] k6 scripts for authenticated bursts (configurable card and request counts; `tests/load/burst.js`, `make load`)
+- [x] Drain-and-verify script that checks inventory and reservation counts (`backend/cmd/drainverify`, `make drain-verify`)
+- [x] Acceptance tests (run small first: 10 cards / 20 requests):
 
   | Scenario | Required result |
   |---|---|
@@ -226,16 +226,29 @@ stamps to skip unchanged redeploys`, and `docs: record Phase 5 decisions and ver
   | Permanently failing message | Reaches DLQ and triggers monitoring |
   | Trainer requests another trainer's result | 404 (result concealed) |
 
-- [ ] `docs/benchmark.md`: p50/p95 submit latency, time to final outcome, throughput, errors, queue drain time, workload size, concurrency, region, config
-- [ ] Review AI-generated code against the tests; record one concrete correction in `docs/decisions.md`
-- [ ] Destroy the `test` stack afterwards
+- [x] `docs/benchmark.md`: p50/p95 submit latency, time to final outcome, throughput, errors, queue drain time, workload size, concurrency, region, config
+- [x] Review AI-generated code against the tests; record one concrete correction in `docs/decisions.md` (`SafeConcurrency`, caught by the load test)
+- [x] Destroy the `test` stack afterwards (done by the maintainer; confirmed gone with read-only calls)
 
 **Commits**
-- [ ] `test: cover reservation outcomes authorization and failure paths`
-- [ ] `perf: add reproducible load tests and benchmark report`
+- [x] `test: cover reservation outcomes authorization and failure paths`
+- [x] `perf: add reproducible load tests and benchmark report`
+
+Also committed (one logical change each): `feat: allow worker failure injection in the test stage`, `feat: set card stock
+from make seed`, `test: cover decoding, error mapping and retry cancellation`, `perf: add k6 bursts and a drain and verify
+tool`, `fix: halve the load concurrency cap after observed throttling`, `fix: say whether the clock is ahead or behind in
+the preflight`, `fix: state the one second timing floor in the load report`, and the final `docs:` commits.
 
 **Milestone**
-- [ ] The repository contains measured, reproducible evidence for its reliability claims
+- [x] The repository contains measured, reproducible evidence for its reliability claims
+
+> Verified on `pokedrop-test` (2026-11-10); the full figures, limits and commit hashes are in docs/benchmark.md.
+> Rows 1, 2, 3 and 5 are automated tests and all passed. **Row 1 at scale:** the first full run (4 in flight, commit
+> `84f641e`) was throttled by the account's Lambda limit of 10 and got 194 of 200 accepted, 100 CONFIRMED + 94 SOLD_OUT;
+> it is kept as a failing run. The corrected run (2 in flight, report commit `3746732`) gave **exactly 100 CONFIRMED + 100
+> SOLD_OUT** with no throttles, no double rows and an empty DLQ. **Row 4** was not re-run: its evidence is the Phase 5
+> drills on `pokedrop-dev`. The 1 s resolution of `updatedAt` limits time to final outcome, and one hot-key conflict in
+> the clean run took the full 60 s visibility timeout.
 
 ---
 

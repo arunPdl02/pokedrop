@@ -54,7 +54,7 @@ done
 **Worker logs.** The worker logs one JSON line per record, with `messageId`, `requestId`, `cardId`,
 `attempt` (the SQS receive count), `outcome` and `durationMs`. `outcome` is `CONFIRMED` or
 `SOLD_OUT` (with `duplicate`), `RETRY` (WARN) or `FAILED` (ERROR). A line with `injectedFailure`
-means the dev failure flag is on.
+means the failure flag (dev and test stacks only) is on.
 
 ```sh
 # Errors (permanent failures, startup errors) in the last hour
@@ -90,7 +90,7 @@ says why it failed.
 | `FAILED`, `body is not a reservation message`, `not a UUID`, `no trainerId` or `invalid cardId` | Poison: it can never succeed | None | Delete it (step 3). Replaying it only fails 5 more times |
 | `FAILED`, card missing | Valid shape, unknown card | Seed the card if it should exist (`make seed`), otherwise treat it as poison | Replay or delete |
 | `RETRY` with a conflict, throttling or timeout error on every attempt | Transient | Wait for the outage to end, or fix the throttling or capacity issue | Replay (step 4) |
-| `CONFIRMED`/`SOLD_OUT` with `injectedFailure` | The dev failure flag was left on | `make fail-status`, then `make fail-off` (after `cdk diff`) and `make fail-status` again prints `off` | Replay |
+| `CONFIRMED`/`SOLD_OUT` with `injectedFailure` | The failure flag (dev or test) was left on | `make fail-status`, then `make fail-off` (after `cdk diff`) and `make fail-status` again prints `off` | Replay |
 | A crash or timeout, or `worker-crashes` in ALARM | Worker bug or bad deploy | Fix the code and deploy (`cdk diff`, then `make deploy`) | Replay |
 
 **Replaying a valid message is always safe.** The worker writes the outcome only if none exists for
@@ -177,7 +177,7 @@ aws dynamodb get-item --table-name "$INVENTORY" --consistent-read \
 reports 0 visible messages, which can take a few minutes. Each alarm sends an OK email. In dev,
 also check that `make fail-status` prints `off`.
 
-## Drills (dev only)
+## Drills (dev and test)
 
 | Drill | Commands | Expected |
 |---|---|---|
@@ -186,8 +186,13 @@ also check that `make fail-status` prints `off`.
 | Poison message | `scripts/poison-message.sh` (prints the command), then `--send` | 5 `FAILED` ERROR lines about 60 s apart, then the message is in the DLQ. `dlq-messages` and `worker-error-logs` fire. Delete it (step 3) |
 
 `make fail-on`/`fail-off` are full CDK deploys, so run `cdk diff` first (with
-`-c failAfterCommit=…`). CDK refuses the flag outside dev, and a plain `make deploy` always turns
-it off.
+`-c failAfterCommit=…`). CDK refuses the flag outside the dev and test stages, and a plain `make deploy`
+always turns it off.
+
+The first drill is also an automated test on the `test` stack (`make test-integration-failure STAGE=test`,
+see [benchmark.md](benchmark.md#acceptance)). The other two drills, including the poison message that
+reaches the DLQ and raises the alarms (acceptance row 4), have only been run on `pokedrop-dev`; the results
+below are that evidence.
 
 ## Drill results
 
