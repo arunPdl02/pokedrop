@@ -1,4 +1,5 @@
 import { App } from 'aws-cdk-lib';
+import { CiStack } from '../lib/ci';
 import { PokedropStack } from '../lib/pokedrop-stack';
 import { parseFailAfterCommit } from '../lib/worker';
 
@@ -16,10 +17,21 @@ if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) {
   throw new Error('Set ALARM_EMAIL to the address that receives alarm emails');
 }
 
+const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-west-2' };
+
 new PokedropStack(app, `pokedrop-${stage}`, {
   stage,
   alarmEmail,
   // `make fail-on` / `make fail-off`; the stack refuses it outside dev and test.
   failAfterCommit: parseFailAfterCommit(app.node.tryGetContext('failAfterCommit')),
-  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-west-2' },
+  env,
 });
+
+// The GitHub deploy role belongs to prod only. Deploy it by hand once (`make deploy-ci`); the
+// deploy workflow then deploys `pokedrop-prod`, never this stack.
+if (stage === 'prod') {
+  new CiStack(app, 'pokedrop-ci', {
+    env,
+    existingProviderArn: app.node.tryGetContext('githubOidcProviderArn'),
+  });
+}

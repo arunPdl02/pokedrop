@@ -3,7 +3,7 @@ export AWS_REGION ?= us-west-2
 STAGE ?= dev
 CDK = cd infra && npx cdk
 
-.PHONY: frontend-config install build build-frontend build-lambda lint test test-local test-local-run test-integration test-integration-failure load drain-verify deploy hotswap destroy fail-on fail-off fail-status seed token
+.PHONY: frontend-config install build build-frontend build-lambda lint test test-local test-local-run test-integration test-integration-failure load drain-verify deploy deploy-ci hotswap destroy fail-on fail-off fail-status seed token
 
 DYNAMODB_LOCAL_IMAGE = amazon/dynamodb-local:3.3.2
 DYNAMODB_LOCAL_PORT ?= 8000
@@ -112,13 +112,20 @@ drain-verify:
 # Full deploy through CDK (the only way resources are created or changed).
 # CDK prompts before applying IAM/security-group changes.
 deploy: build
-	$(CDK) deploy --all -c stage=$(STAGE)
+	$(CDK) deploy pokedrop-$(STAGE) -c stage=$(STAGE)
+
+# The GitHub OIDC deploy role (prod only, a stack of its own). Run once by hand; after that the
+# deploy workflow deploys pokedrop-prod. Review `cd infra && npx cdk diff pokedrop-ci -c stage=prod`
+# first, and run this from an interactive terminal like `make deploy`. If the account already has a
+# GitHub OIDC provider, add -c githubOidcProviderArn=<its ARN> (see docs/decisions.md).
+deploy-ci:
+	$(CDK) deploy pokedrop-ci -c stage=prod
 
 # Fast path for Lambda code changes. --hotswap updates the Lambdas directly and ignores changes it
 # cannot hotswap (it does not fall back to a full deployment), and CloudFormation's template is
 # left as it was. Use `make deploy` for anything else.
 hotswap: build
-	$(CDK) deploy --all --hotswap -c stage=$(STAGE)
+	$(CDK) deploy pokedrop-$(STAGE) --hotswap -c stage=$(STAGE)
 
 # Tear down the isolated test stack (Phase 6). Test only: it will not touch dev or prod. CDK asks
 # for confirmation, so run it from an interactive terminal.
@@ -136,11 +143,11 @@ MODE ?= once
 fail-on: build
 	@case "$(STAGE)" in dev | test) ;; *) echo "fail-on is dev/test-only (STAGE=$(STAGE))" >&2; exit 1 ;; esac
 	@case "$(MODE)" in once | always) ;; *) echo "MODE must be once or always" >&2; exit 1 ;; esac
-	$(CDK) deploy --all -c stage=$(STAGE) -c failAfterCommit=$(MODE)
+	$(CDK) deploy pokedrop-$(STAGE) -c stage=$(STAGE) -c failAfterCommit=$(MODE)
 
 fail-off: build
 	@case "$(STAGE)" in dev | test) ;; *) echo "fail-off is dev/test-only (STAGE=$(STAGE))" >&2; exit 1 ;; esac
-	$(CDK) deploy --all -c stage=$(STAGE) -c failAfterCommit=off
+	$(CDK) deploy pokedrop-$(STAGE) -c stage=$(STAGE) -c failAfterCommit=off
 
 # Print the deployed worker's failure injection mode (read-only).
 fail-status:
