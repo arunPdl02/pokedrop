@@ -205,6 +205,30 @@ func TestReservationFromItemRejectsEveryBadAttribute(t *testing.T) {
 	}
 }
 
+// Only CONFIRMED and SOLD_OUT are recorded outcomes. QUEUED is the POST response, never stored, and
+// anything else (a typo, a different case, a future status) must not reach a trainer as a result.
+func TestReservationFromItemRejectsUnknownStatuses(t *testing.T) {
+	for _, status := range []string{"QUEUED", "PENDING", "confirmed", "Sold_Out", " CONFIRMED", "CONFIRMED "} {
+		item := validReservationItem()
+		item[ReservationStatus] = s(status)
+		if _, err := reservationFromItem(item); err == nil {
+			t.Errorf("status %q: expected an error", status)
+		}
+	}
+	for _, status := range []reservations.Status{reservations.StatusConfirmed, reservations.StatusSoldOut} {
+		item := validReservationItem()
+		item[ReservationStatus] = s(string(status))
+		got, err := reservationFromItem(item)
+		if err != nil {
+			t.Errorf("status %q: %v", status, err)
+			continue
+		}
+		if got.Status != status {
+			t.Errorf("status = %q, want %q", got.Status, status)
+		}
+	}
+}
+
 func TestReservationFromItemNormalizesTimestampsToUTC(t *testing.T) {
 	item := validReservationItem()
 	item[ReservationUpdatedAt] = s("2026-11-07T01:02:03-07:00")

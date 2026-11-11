@@ -144,6 +144,10 @@ func reservationFromItem(item map[string]types.AttributeValue) (*reservations.Re
 	if err != nil {
 		return nil, err
 	}
+	// Only recorded outcomes are ever stored; anything else is corrupt data, not a status to show.
+	if !reservations.Status(status).IsTerminal() {
+		return nil, fmt.Errorf("reservation %q: status %q is not a recorded outcome", request, status)
+	}
 	updated, err := stringAttr(item, ReservationUpdatedAt)
 	if err != nil {
 		return nil, err
