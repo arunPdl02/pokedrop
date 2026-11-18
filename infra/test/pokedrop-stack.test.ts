@@ -266,7 +266,7 @@ describe('PokedropStack API', () => {
   });
 
   test('Lambda can only read the tables and send to the queue', () => {
-    const granted = statementsForRole(template, 'ApiFunctionServiceRole').flatMap((s) => s.actions);
+    const granted = statementsForRole(template, 'ApiRole').flatMap((s) => s.actions);
     expect(granted.sort()).toEqual(
       [
         'dynamodb:GetItem',
@@ -275,9 +275,12 @@ describe('PokedropStack API', () => {
         'sqs:GetQueueAttributes',
         'sqs:GetQueueUrl',
         'sqs:SendMessage',
+        'logs:CreateLogStream',
+        'logs:PutLogEvents',
       ].sort(),
     );
-    for (const action of granted) {
+    // No data writes. Its own log writes are checked in "Lambda execution roles".
+    for (const action of granted.filter((a) => !a.startsWith('logs:'))) {
       expect(action).not.toMatch(/Put|Update|Delete|Transact|Receive/);
     }
   });
@@ -405,7 +408,7 @@ describe('PokedropStack worker', () => {
   });
 
   test('can update inventory, put and get reservations, and consume the queue, nothing else', () => {
-    const grants = statementsForRole(template, 'WorkerFunctionServiceRole');
+    const grants = statementsForRole(template, 'WorkerRole');
     const byResource = (prefix: string) =>
       grants
         .filter((g) => g.resources.some((r) => r.startsWith(prefix)))
@@ -424,9 +427,10 @@ describe('PokedropStack worker', () => {
       ].sort(),
     );
     expect(byResource('ReservationDlq')).toEqual([]);
+    expect(byResource('WorkerLogs')).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents']);
 
     const all = grants.flatMap((g) => g.actions);
-    expect(all).toHaveLength(8);
+    expect(all).toHaveLength(10);
     for (const action of all) {
       expect(action).not.toMatch(/SendMessage|Scan|Query|DeleteItem|Batch/);
     }
@@ -654,6 +658,80 @@ describe('PokedropStack test stage', () => {
       );
     }
   });
+});
+
+describe('PokedropStack Lambda execution roles', () => {
+  /** Logical ID of the role a function runs as (`Role: { Fn::GetAtt: [<role>, Arn] }`). */
+  function roleOf(template: Template, functionPrefix: string): string {
+    const fns = Object.entries<any>(template.findResources('AWS::Lambda::Function')).filter(
+      ([id]) => id.startsWith(functionPrefix),
+    );
+    expect(fns).toHaveLength(1);
+    return fns[0]![1].Properties.Role['Fn::GetAtt'][0];
+  }
+
+  for (const stage of ['dev', 'prod']) {
+    describe(stage, () => {
+      const template = synth(stage);
+      const roles = template.findResources('AWS::IAM::Role');
+
+      test('each function runs as its own role with no managed policy', () => {
+        const api = roleOf(template, 'ApiFunction');
+        const worker = roleOf(template, 'WorkerFunction');
+        expect(api).toMatch(/^ApiRole/);
+        expect(worker).toMatch(/^WorkerRole/);
+        for (const id of [api, worker]) {
+          expect(roles[id]!.Properties.ManagedPolicyArns).toBeUndefined();
+          expect(roles[id]!.Properties.AssumeRolePolicyDocument.Statement).toEqual([
+            {
+              Action: 'sts:AssumeRole',
+              Effect: 'Allow',
+              Principal: { Service: 'lambda.amazonaws.com' },
+            },
+          ]);
+        }
+      });
+
+      test('each function can write logs only to its own log group', () => {
+        for (const [rolePrefix, logGroupPrefix] of [
+          ['ApiRole', 'ApiLogs'],
+          ['WorkerRole', 'WorkerLogs'],
+        ] as const) {
+          const logGrants = statementsForRole(template, rolePrefix).filter((g) =>
+            g.actions.some((a) => a.startsWith('logs:')),
+          );
+          expect(logGrants).toHaveLength(1);
+          expect(logGrants[0]!.actions.sort()).toEqual([
+            'logs:CreateLogStream',
+            'logs:PutLogEvents',
+          ]);
+          expect(logGrants[0]!.resources).toEqual([expect.stringMatching(`^${logGroupPrefix}`)]);
+        }
+      });
+
+      test('no statement allows log actions on every resource', () => {
+        for (const policy of Object.values<any>(template.findResources('AWS::IAM::Policy'))) {
+          for (const statement of policy.Properties.PolicyDocument.Statement) {
+            const actions = ([] as string[]).concat(statement.Action);
+            if (actions.some((a) => a.startsWith('logs:'))) {
+              expect(([] as unknown[]).concat(statement.Resource)).not.toContain('*');
+            }
+          }
+        }
+      });
+
+      test('the basic execution policy appears only on roles CDK creates for its own helpers', () => {
+        const withManaged = Object.entries<any>(roles)
+          .filter(([, role]) => role.Properties.ManagedPolicyArns !== undefined)
+          .map(([id]) => id);
+        // dev has none; prod has the two deploy-time helpers behind the site (they never serve traffic).
+        for (const id of withManaged) {
+          expect(id).toMatch(/^Custom(CDKBucketDeployment|S3AutoDeleteObjects)/);
+        }
+        expect(withManaged).toHaveLength(stage === 'prod' ? 2 : 0);
+      });
+    });
+  }
 });
 
 describe('PokedropStack frontend hosting', () => {
